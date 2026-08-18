@@ -41,6 +41,28 @@ function rows(response: unknown): Obj[] {
   return [];
 }
 
+type DimepPage = { items: Obj[]; currentPage: number | null; totalPages: number | null };
+
+function positiveInteger(value: unknown) {
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
+}
+
+function page(response: unknown): DimepPage {
+  if (isObject(response) && value(response, "Sucesso", "Success") === false) {
+    throw new Error(`DIMEP: ${text(value(response, "Mensagem", "Message")) || "consulta recusada"}`);
+  }
+  return {
+    items: rows(response),
+    currentPage: isObject(response) ? positiveInteger(value(response, "PaginaAtual", "CurrentPage", "Page")) : null,
+    totalPages: isObject(response) ? positiveInteger(value(response, "TotalPagina", "TotalPaginas", "TotalPages")) : null,
+  };
+}
+
+function logDimep(event: string, details: Record<string, unknown>) {
+  console.info(`[dimep] ${event}`, JSON.stringify(details));
+}
+
 function validCpf(cpf: string | null) {
   if (!cpf || !/^\d{11}$/.test(cpf) || /^(\d)\1+$/.test(cpf)) return false;
   const n = cpf.split("").map(Number);
@@ -76,14 +98,31 @@ function employee(row: Obj) {
   };
 }
 
-async function paged(path: string, body: (page: number) => Obj) {
-  const all: Obj[] = []; let previous = "";
-  for (let page = 1; page <= 100; page += 1) {
-    const current = rows(await externalRequest("DIMEP", path, { method: "POST", body: body(page) }));
-    if (!current.length) return all;
-    const signature = hash(current);
-    if (signature === previous) return all;
-    previous = signature; all.push(...current);
+async function paged(path: string, requestBody: (page: number) => Obj) {
+  const all: Obj[] = []; let previous = ""; const startedAt = Date.now();
+  logDimep("consulta iniciada", { path });
+  for (let requestedPage = 1; requestedPage <= 100; requestedPage += 1) {
+    const pageStartedAt = Date.now();
+    const result = page(await externalRequest("DIMEP", path, { method: "POST", body: requestBody(requestedPage) }));
+    logDimep("página recebida", {
+      path, requestedPage, currentPage: result.currentPage, totalPages: result.totalPages,
+      records: result.items.length, durationMs: Date.now() - pageStartedAt,
+    });
+    if (!result.items.length) {
+      logDimep("consulta concluída", { path, pages: requestedPage, records: all.length, durationMs: Date.now() - startedAt });
+      return all;
+    }
+    const signature = hash(result.items);
+    if (signature === previous) {
+      logDimep("paginação repetida interrompida", { path, requestedPage, records: all.length, durationMs: Date.now() - startedAt });
+      return all;
+    }
+    previous = signature; all.push(...result.items);
+    const currentPage = result.currentPage ?? requestedPage;
+    if (result.totalPages !== null && currentPage >= result.totalPages) {
+      logDimep("consulta concluída", { path, pages: currentPage, records: all.length, durationMs: Date.now() - startedAt });
+      return all;
+    }
   }
   throw new Error(`DIMEP: limite de paginação excedido em ${path}`);
 }
@@ -224,6 +263,8 @@ function punch(row: Obj) {
   const pointerId = text(value(row, "Id", "ID")); const appointmentId = text(value(row, "IdApont", "AppointmentId"));
   const externalRecordId = (pointerId && pointerId !== "0" ? pointerId : null) || appointmentId || hash({ externalEmployeeId, occurredAt, nsr: value(row, "NSR"), serial: value(row, "NumeroSerieRep") });
   const kindRaw = text(value(row, "TipoMarcacao", "MarkType"))?.toUpperCase();
+  // Alguns tenants retornam "O" (marcação original), que não informa direção.
+  // Nesses casos o pareamento continua cronológico e o dado bruto permanece no payload.
   const kind = value(row, "Indevido") === true ? "void" : kindRaw === "E" ? "in" : kindRaw === "S" ? "out" : "unknown";
   return { externalEmployeeId, pointerId: pointerId && pointerId !== "0" ? pointerId : null, externalRecordId, occurredAt, workDate, valid, kind, row };
 }
@@ -302,13 +343,14 @@ export async function applyDimepPunches(client: PoolClient, organizationId: stri
 }
 
 export async function acknowledgeDimepPunches(ids: string[]) {
-  if (!ids.length) return { acknowledged: 0, skipped: true };
+  if (!ids.length) return { acknowledged: 0, skipped: true, reason: "A resposta do Kairos não forneceu Id para o avanço seguro do ponteiro." };
   const numeric = ids.map(Number).filter((id) => Number.isSafeInteger(id) && id > 0);
-  if (!numeric.length) return { acknowledged: 0, skipped: true };
+  if (!numeric.length) return { acknowledged: 0, skipped: true, reason: "Nenhum Id de ponteiro válido foi retornado pelo Kairos." };
   const response = await externalRequest("DIMEP", resource("POINTER_ACK"), { method: "POST", body: { IdsMarcacoes: numeric, MarcacaoColetadaAPI: false, ResponseType: "AS400V1" } });
-  const responseRows = rows(response); const failed = responseRows.some((row) => value(row, "Success", "Sucesso") === false);
+  const responseRows = rows(response); const failed = (isObject(response) && value(response, "Success", "Sucesso") === false)
+    || responseRows.some((row) => value(row, "Success", "Sucesso") === false);
   if (failed) throw new Error("DIMEP recusou o avanço do ponteiro de marcações.");
-  return { acknowledged: numeric.length, skipped: false };
+  return { acknowledged: numeric.length, skipped: false, reason: null };
 }
 
 export async function recordDimepPointerResult(client: PoolClient, organizationId: string, runId: string, success: boolean, detail: string) {

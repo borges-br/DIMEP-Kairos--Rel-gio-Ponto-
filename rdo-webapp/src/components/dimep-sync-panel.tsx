@@ -13,25 +13,36 @@ export function DimepSyncPanel() {
 
   async function load(stage: "employees" | "punches") {
     setLoading(stage); setMessage(""); setConfirmations({});
-    const query = new URLSearchParams({ stage }); if (stage === "punches") { query.set("startDate", startDate); query.set("endDate", endDate); }
-    const response = await fetch(`/api/integrations/dimep?${query}`, { cache: "no-store" }); const result = await response.json();
-    if (!response.ok) setMessage(result.error || "Falha ao preparar a prévia DIMEP."); else setPreview(result);
-    setLoading(null);
+    try {
+      const query = new URLSearchParams({ stage }); if (stage === "punches") { query.set("startDate", startDate); query.set("endDate", endDate); }
+      const response = await fetch(`/api/integrations/dimep?${query}`, { cache: "no-store" });
+      const result = await response.json().catch(() => ({ error: `O servidor respondeu HTTP ${response.status} sem JSON válido.` }));
+      if (!response.ok) setMessage(result.error || "Falha ao preparar a prévia DIMEP."); else setPreview(result);
+    } catch (error) {
+      setMessage(error instanceof Error ? `Falha de comunicação com o servidor: ${error.message}` : "Falha de comunicação com o servidor.");
+    } finally {
+      setLoading(null);
+    }
   }
 
   async function apply() {
     if (!preview) return; setLoading("apply"); setMessage("");
-    const selected = preview.stage === "employees" ? Object.entries(confirmations).map(([externalId, candidateId]) => ({ externalId, candidateId })) : [];
-    const response = await fetch("/api/integrations/dimep", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ stage: preview.stage, digest: preview.digest, startDate: preview.stage === "punches" ? preview.startDate : undefined, endDate: preview.stage === "punches" ? preview.endDate : undefined, confirmations: selected }) });
-    const result = await response.json();
-    if (!response.ok) { setMessage(result.error || "Falha na sincronização DIMEP."); if (result.preview) setPreview(result.preview); }
-    else {
-      setPreview(null);
-      const pointer = result.pointerError ? ` Batidas salvas, mas o ponteiro não avançou: ${result.pointerError}` : result.pointer ? ` Ponteiro confirmado para ${result.pointer.acknowledged} batida(s).` : "";
-      setMessage(`Sincronização concluída: ${result.written} gravado(s), ${result.rejected} pendência(s).${pointer}`);
-      window.setTimeout(() => window.location.reload(), 1800);
+    try {
+      const selected = preview.stage === "employees" ? Object.entries(confirmations).map(([externalId, candidateId]) => ({ externalId, candidateId })) : [];
+      const response = await fetch("/api/integrations/dimep", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ stage: preview.stage, digest: preview.digest, startDate: preview.stage === "punches" ? preview.startDate : undefined, endDate: preview.stage === "punches" ? preview.endDate : undefined, confirmations: selected }) });
+      const result = await response.json().catch(() => ({ error: `O servidor respondeu HTTP ${response.status} sem JSON válido.` }));
+      if (!response.ok) { setMessage(result.error || "Falha na sincronização DIMEP."); if (result.preview) setPreview(result.preview); }
+      else {
+        setPreview(null);
+        const pointer = result.pointerError ? ` Batidas salvas, mas o ponteiro não avançou: ${result.pointerError}` : result.pointer ? ` Ponteiro confirmado para ${result.pointer.acknowledged} batida(s).` : "";
+        setMessage(`Sincronização concluída: ${result.written} gravado(s), ${result.rejected} pendência(s).${pointer}`);
+        window.setTimeout(() => window.location.reload(), 3000);
+      }
+    } catch (error) {
+      setMessage(error instanceof Error ? `Falha de comunicação com o servidor: ${error.message}` : "Falha de comunicação com o servidor.");
+    } finally {
+      setLoading(null);
     }
-    setLoading(null);
   }
 
   return <section className="panel imuv-sync-panel dimep-sync-panel">
