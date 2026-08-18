@@ -14,6 +14,11 @@ export const maxDuration = 300;
 type Stage = "employees" | "punches";
 const stage = (value: unknown): Stage | null => value === "employees" || value === "punches" ? value : null;
 const date = (value: unknown) => typeof value === "string" ? value : "";
+const validationMessage = (error: unknown) => error instanceof Error && (
+  error.message.startsWith("Período DIMEP inválido")
+  || error.message.startsWith("A data inicial")
+  || error.message.startsWith("Selecione um período")
+);
 
 export async function GET(request: Request) {
   const session = await requireAnyRole(["director", "admin"]);
@@ -35,7 +40,7 @@ export async function GET(request: Request) {
     return Response.json(response);
   } catch (error) {
     console.error("[dimep] falha na prévia", JSON.stringify({ stage: selected, durationMs: Date.now() - startedAt, error: error instanceof Error ? error.message : "erro desconhecido" }));
-    return Response.json({ error: error instanceof Error ? error.message : "Falha ao consultar o DIMEP." }, { status: 502 });
+    return Response.json({ error: error instanceof Error ? error.message : "Falha ao consultar o DIMEP." }, { status: validationMessage(error) ? 400 : 502 });
   }
 }
 
@@ -76,6 +81,7 @@ export async function POST(request: Request) {
     revalidatePath("/employees"); revalidatePath("/hours"); revalidatePath("/settings");
     return Response.json({ ...result.applied, ackIds: undefined, pointer, pointerError: pointerError || null });
   } catch (error) {
-    return Response.json({ error: error instanceof Error ? error.message : "Falha ao aplicar sincronização DIMEP." }, { status: 502 });
+    console.error("[dimep] falha na aplicação", JSON.stringify({ stage: selected, error: error instanceof Error ? error.message : "erro desconhecido" }));
+    return Response.json({ error: error instanceof Error ? error.message : "Falha ao aplicar sincronização DIMEP." }, { status: validationMessage(error) ? 400 : 502 });
   }
 }

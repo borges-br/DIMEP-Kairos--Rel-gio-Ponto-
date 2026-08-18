@@ -2,6 +2,7 @@ import "server-only";
 
 import { createHash } from "node:crypto";
 import type { PoolClient } from "pg";
+import { DIMEP_MAX_PERIOD_DAYS, DIMEP_PAGE_WINDOW_DAYS } from "@/lib/integrations/dimep-constants";
 import { externalRequest } from "@/lib/integrations/http";
 
 type Obj = Record<string, unknown>;
@@ -131,10 +132,37 @@ export function validateDimepPeriod(startDate: string, endDate: string) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(startDate) || !/^\d{4}-\d{2}-\d{2}$/.test(endDate)) throw new Error("Período DIMEP inválido.");
   const start = new Date(`${startDate}T12:00:00Z`); const end = new Date(`${endDate}T12:00:00Z`);
   const days = Math.round((end.getTime() - start.getTime()) / 86_400_000);
-  if (days < 0 || days > 31) throw new Error("Selecione um período de até 31 dias.");
+  if (days < 0) throw new Error("A data inicial não pode ser posterior à data final.");
+  if (days >= DIMEP_MAX_PERIOD_DAYS) throw new Error(`Selecione um período de até ${DIMEP_MAX_PERIOD_DAYS} dias.`);
 }
 
 const brDate = (date: string) => date.split("-").reverse().join("-");
+const isoDate = (date: Date) => date.toISOString().slice(0, 10);
+
+function dimepPeriodWindows(startDate: string, endDate: string) {
+  const windows: Array<{ startDate: string; endDate: string }> = [];
+  const cursor = new Date(`${startDate}T12:00:00Z`); const limit = new Date(`${endDate}T12:00:00Z`);
+  while (cursor <= limit) {
+    const windowStart = new Date(cursor); const windowEnd = new Date(cursor);
+    windowEnd.setUTCDate(windowEnd.getUTCDate() + DIMEP_PAGE_WINDOW_DAYS - 1);
+    if (windowEnd > limit) windowEnd.setTime(limit.getTime());
+    windows.push({ startDate: isoDate(windowStart), endDate: isoDate(windowEnd) });
+    cursor.setTime(windowEnd.getTime()); cursor.setUTCDate(cursor.getUTCDate() + 1);
+  }
+  return windows;
+}
+
+async function mapWithConcurrency<T, R>(items: T[], concurrency: number, work: (item: T, index: number) => Promise<R>) {
+  const results = new Array<R>(items.length); let next = 0;
+  async function worker() {
+    while (next < items.length) {
+      const index = next; next += 1;
+      results[index] = await work(items[index], index);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, () => worker()));
+  return results;
+}
 
 export async function fetchDimepEmployees() {
   return paged(resource("EMPLOYEES"), (Pagina) => ({ Excluido: false, Pagina, CarregarBiometrias: false }));
@@ -142,9 +170,17 @@ export async function fetchDimepEmployees() {
 
 export async function fetchDimepPunches(startDate: string, endDate: string) {
   validateDimepPeriod(startDate, endDate);
-  return paged(resource("MARKS"), (Pagina) => ({
-    IdsPessoa: [0], MarcacaoColetadaAPI: false, DataInicio: brDate(startDate), DataFim: brDate(endDate), ResponseType: "AS400V1", Pagina,
-  }));
+  const windows = dimepPeriodWindows(startDate, endDate);
+  logDimep("período dividido", { startDate, endDate, windows: windows.length, windowDays: DIMEP_PAGE_WINDOW_DAYS });
+  const result = await mapWithConcurrency(windows, 2, async (window, index) => {
+    logDimep("bloco iniciado", { block: index + 1, blocks: windows.length, ...window });
+    const records = await paged(resource("MARKS"), (Pagina) => ({
+      IdsPessoa: [0], MarcacaoColetadaAPI: false, DataInicio: brDate(window.startDate), DataFim: brDate(window.endDate), ResponseType: "AS400V1", Pagina,
+    }));
+    logDimep("bloco concluído", { block: index + 1, blocks: windows.length, records: records.length, ...window });
+    return records;
+  });
+  return result.flat();
 }
 
 type LocalEmployee = { id: string; full_name: string; normalized_name: string; cpf_digits: string | null; cpf_is_valid: boolean; employee_number: string | null };
