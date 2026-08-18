@@ -1,0 +1,164 @@
+name: rdo-interproject
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-rdo}
+      POSTGRES_USER: ${POSTGRES_USER:-rdo_admin}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?defina POSTGRES_PASSWORD}
+      POSTGRES_RUNTIME_USER: ${POSTGRES_RUNTIME_USER:-rdo_app}
+      POSTGRES_RUNTIME_PASSWORD: ${POSTGRES_RUNTIME_PASSWORD:?defina POSTGRES_RUNTIME_PASSWORD}
+      TZ: America/Sao_Paulo
+      PGTZ: America/Sao_Paulo
+    volumes:
+      - rdo_postgres_data:/var/lib/postgresql/data
+      - ./database/001_initial_schema.sql:/docker-entrypoint-initdb.d/001_initial_schema.sql:ro
+      - ./database/002_create_runtime_user.sh:/docker-entrypoint-initdb.d/002_create_runtime_user.sh:ro
+      - ./database/003_field_diary_extensions.sql:/docker-entrypoint-initdb.d/003_field_diary_extensions.sql:ro
+      - ./database/004_collaborator_profile_overrides.sql:/docker-entrypoint-initdb.d/004_collaborator_profile_overrides.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    networks: [rdo_internal]
+    security_opt: [no-new-privileges:true]
+
+  minio:
+    image: minio/minio:latest
+    restart: unless-stopped
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-rdo_minio}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?defina MINIO_ROOT_PASSWORD}
+    volumes:
+      - rdo_minio_data:/data
+    ports:
+      - "${MINIO_BIND_ADDRESS:-127.0.0.1}:${MINIO_API_PORT:-9100}:9000"
+      - "${MINIO_BIND_ADDRESS:-127.0.0.1}:${MINIO_CONSOLE_PORT:-9101}:9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    networks:
+      - rdo_internal
+      - rdo_edge
+    security_opt: [no-new-privileges:true]
+
+  minio-init:
+    image: minio/mc:latest
+    restart: "no"
+    depends_on:
+      minio:
+        condition: service_healthy
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-rdo_minio}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?defina MINIO_ROOT_PASSWORD}
+      OBJECT_STORAGE_BUCKET: ${OBJECT_STORAGE_BUCKET:-rdo-evidencias}
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >-
+        mc alias set rdo http://minio:9000 "$${MINIO_ROOT_USER}" "$${MINIO_ROOT_PASSWORD}" &&
+        mc mb --ignore-existing "rdo/$${OBJECT_STORAGE_BUCKET}"
+    networks: [rdo_internal]
+    security_opt: [no-new-privileges:true]
+
+  web:
+    build:
+      context: ./rdo-webapp
+      dockerfile: Dockerfile
+    image: rdo-interproject-web:${DEPLOYMENT_VERSION:-latest}
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    environment: &web_environment
+      NODE_ENV: production
+      APP_BASE_URL: ${APP_BASE_URL:-https://rdo.interproject.com.br}
+      APP_DEFAULT_ORGANIZATION_ID: ${APP_DEFAULT_ORGANIZATION_ID:?defina APP_DEFAULT_ORGANIZATION_ID}
+      AUTH_COOKIE_NAME: ${AUTH_COOKIE_NAME:-__Host-rdo_session}
+      SESSION_TTL_HOURS: ${SESSION_TTL_HOURS:-8}
+      NEXT_SERVER_ACTIONS_ENCRYPTION_KEY: ${NEXT_SERVER_ACTIONS_ENCRYPTION_KEY:?defina NEXT_SERVER_ACTIONS_ENCRYPTION_KEY}
+      DEPLOYMENT_VERSION: ${DEPLOYMENT_VERSION:-latest}
+      DATABASE_URL: postgresql://${POSTGRES_RUNTIME_USER:-rdo_app}:${POSTGRES_RUNTIME_PASSWORD}@postgres:5432/${POSTGRES_DB:-rdo}
+      DATABASE_ADMIN_URL: postgresql://${POSTGRES_USER:-rdo_admin}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-rdo}
+      DATABASE_SSL: ${DATABASE_SSL:-false}
+      DATABASE_POOL_MAX: ${DATABASE_POOL_MAX:-10}
+      IMUV_API_BASE_URL: ${IMUV_API_BASE_URL:-}
+      IMUV_API_TOKEN: ${IMUV_API_TOKEN:-}
+      IMUV_TENANT: ${IMUV_TENANT:-}
+      IMUV_PROJECTS_PATH: ${IMUV_PROJECTS_PATH:-/project}
+      IMUV_TASKS_PATH: ${IMUV_TASKS_PATH:-/task}
+      IMUV_PEOPLE_PATH: ${IMUV_PEOPLE_PATH:-/people}
+      IMUV_COLLABORATORS_PATH: ${IMUV_COLLABORATORS_PATH:-/collaborator}
+      IMUV_PROJECT_IDENTIFIER_FIELD: ${IMUV_PROJECT_IDENTIFIER_FIELD:-code}
+      IMUV_TASK_IDENTIFIER_FIELD: ${IMUV_TASK_IDENTIFIER_FIELD:-code}
+      IMUV_WEBHOOK_SECRET: ${IMUV_WEBHOOK_SECRET:-}
+      IMUV_TIMEOUT_MS: ${IMUV_TIMEOUT_MS:-15000}
+      DIMEP_API_BASE_URL: ${DIMEP_API_BASE_URL:-}
+      DIMEP_API_TOKEN: ${DIMEP_API_TOKEN:-}
+      DIMEP_API_CLIENT_ID: ${DIMEP_API_CLIENT_ID:-}
+      DIMEP_API_CLIENT_SECRET: ${DIMEP_API_CLIENT_SECRET:-}
+      DIMEP_API_USERNAME: ${DIMEP_API_USERNAME:-}
+      DIMEP_API_PASSWORD: ${DIMEP_API_PASSWORD:-}
+      DIMEP_TENANT: ${DIMEP_TENANT:-}
+      DIMEP_MARKS_PATH: ${DIMEP_MARKS_PATH:-}
+      DIMEP_EMPLOYEES_PATH: ${DIMEP_EMPLOYEES_PATH:-}
+      DIMEP_TIMEOUT_MS: ${DIMEP_TIMEOUT_MS:-15000}
+      OBJECT_STORAGE_PROVIDER: ${OBJECT_STORAGE_PROVIDER:-minio}
+      OBJECT_STORAGE_ENDPOINT: ${OBJECT_STORAGE_ENDPOINT:-http://minio:9000}
+      OBJECT_STORAGE_REGION: ${OBJECT_STORAGE_REGION:-us-east-1}
+      OBJECT_STORAGE_BUCKET: ${OBJECT_STORAGE_BUCKET:-rdo-evidencias}
+      OBJECT_STORAGE_ACCESS_KEY: ${MINIO_ROOT_USER:-rdo_minio}
+      OBJECT_STORAGE_SECRET_KEY: ${MINIO_ROOT_PASSWORD}
+      OBJECT_STORAGE_FORCE_PATH_STYLE: ${OBJECT_STORAGE_FORCE_PATH_STYLE:-true}
+      MEDIA_MAX_FILE_MB: ${MEDIA_MAX_FILE_MB:-15}
+    ports:
+      - "${WEB_BIND_ADDRESS:-127.0.0.1}:${WEB_PORT:-3000}:3000"
+    networks:
+      - rdo_internal
+      - rdo_edge
+    security_opt: [no-new-privileges:true]
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,noexec,nosuid
+
+  admin:
+    image: rdo-interproject-web:${DEPLOYMENT_VERSION:-latest}
+    profiles: [admin]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      <<: *web_environment
+      ORGANIZATION_LEGAL_NAME: ${ORGANIZATION_LEGAL_NAME:-GLB Tech}
+      ORGANIZATION_TRADE_NAME: ${ORGANIZATION_TRADE_NAME:-GLB Tech}
+      ORGANIZATION_CNPJ: ${ORGANIZATION_CNPJ:-}
+      ADMIN_NAME: ${ADMIN_NAME:?defina ADMIN_NAME}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:?defina ADMIN_EMAIL}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?defina ADMIN_PASSWORD}
+      ADMIN_ROLES: ${ADMIN_ROLES:-admin,director}
+    command: ["node", "scripts/create-admin.mjs"]
+    networks: [rdo_internal]
+    security_opt: [no-new-privileges:true]
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,noexec,nosuid
+
+volumes:
+  rdo_postgres_data:
+  rdo_minio_data:
+
+networks:
+  rdo_internal:
+    internal: true
+  rdo_edge:

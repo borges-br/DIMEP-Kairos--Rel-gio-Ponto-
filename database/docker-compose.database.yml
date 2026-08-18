@@ -1,0 +1,35 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: rdo-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-rdo}
+      POSTGRES_USER: ${POSTGRES_USER:-rdo_admin}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?defina POSTGRES_PASSWORD no Portainer}
+      POSTGRES_RUNTIME_USER: ${POSTGRES_RUNTIME_USER:-rdo_app}
+      POSTGRES_RUNTIME_PASSWORD: ${POSTGRES_RUNTIME_PASSWORD:?defina POSTGRES_RUNTIME_PASSWORD no Portainer}
+      TZ: America/Sao_Paulo
+      PGTZ: America/Sao_Paulo
+    volumes:
+      - rdo_postgres_data:/var/lib/postgresql/data
+      - ./001_initial_schema.sql:/docker-entrypoint-initdb.d/001_initial_schema.sql:ro
+      - ./002_create_runtime_user.sh:/docker-entrypoint-initdb.d/002_create_runtime_user.sh:ro
+      - ./003_field_diary_extensions.sql:/docker-entrypoint-initdb.d/003_field_diary_extensions.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    networks:
+      - rdo_internal
+
+volumes:
+  rdo_postgres_data:
+    name: rdo_postgres_data
+
+networks:
+  rdo_internal:
+    name: rdo_internal
+    internal: true
