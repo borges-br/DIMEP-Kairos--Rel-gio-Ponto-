@@ -73,6 +73,7 @@ services:
       context: ./rdo-webapp
       dockerfile: Dockerfile
     image: rdo-interproject-web:${DEPLOYMENT_VERSION:-latest}
+    pull_policy: build
     restart: unless-stopped
     depends_on:
       postgres:
