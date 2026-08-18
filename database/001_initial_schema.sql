@@ -127,7 +127,7 @@ FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 CREATE TABLE organization_user_roles (
   organization_id uuid NOT NULL REFERENCES organizations(id),
   user_id uuid NOT NULL REFERENCES app_users(id),
-  role text NOT NULL CHECK (role IN ('leader', 'foreman', 'manager', 'director', 'admin')),
+  role text NOT NULL CHECK (role IN ('leader', 'foreman', 'manager', 'hr', 'director', 'admin')),
   active boolean NOT NULL DEFAULT true,
   created_at timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (organization_id, user_id, role)
@@ -144,6 +144,8 @@ CREATE TABLE collaborators (
   employee_number text,
   job_title text,
   department text,
+  email citext,
+  phone text,
   employment_status text NOT NULL DEFAULT 'active'
     CHECK (employment_status IN ('active', 'inactive', 'leave', 'unknown')),
   active boolean NOT NULL DEFAULT true,
@@ -183,6 +185,9 @@ CREATE TABLE collaborator_profile_overrides (
   employee_number_override text,
   job_title_override text,
   department_override text,
+  email_override citext,
+  phone_override text,
+  active_override boolean,
   reason text NOT NULL,
   updated_by_user_id uuid NOT NULL,
   created_at timestamptz NOT NULL DEFAULT now(),
@@ -193,14 +198,17 @@ CREATE TABLE collaborator_profile_overrides (
   FOREIGN KEY (organization_id, updated_by_user_id)
     REFERENCES organization_users(organization_id, user_id),
   CONSTRAINT collaborator_override_has_value CHECK (
-    num_nonnulls(full_name_override, employee_number_override, job_title_override, department_override) > 0
+    num_nonnulls(full_name_override, employee_number_override, job_title_override,
+      department_override, email_override, phone_override, active_override) > 0
   ),
   CONSTRAINT collaborator_override_reason CHECK (length(btrim(reason)) >= 10),
   CONSTRAINT collaborator_override_text CHECK (
     (full_name_override IS NULL OR btrim(full_name_override) <> '') AND
     (employee_number_override IS NULL OR btrim(employee_number_override) <> '') AND
     (job_title_override IS NULL OR btrim(job_title_override) <> '') AND
-    (department_override IS NULL OR btrim(department_override) <> '')
+    (department_override IS NULL OR btrim(department_override) <> '') AND
+    (email_override IS NULL OR btrim(email_override::text) <> '') AND
+    (phone_override IS NULL OR btrim(phone_override) <> '')
   )
 );
 CREATE TRIGGER collaborator_profile_overrides_updated_at

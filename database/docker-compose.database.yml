@@ -17,6 +17,7 @@ services:
       - ./002_create_runtime_user.sh:/docker-entrypoint-initdb.d/002_create_runtime_user.sh:ro
       - ./003_field_diary_extensions.sql:/docker-entrypoint-initdb.d/003_field_diary_extensions.sql:ro
       - ./004_collaborator_profile_overrides.sql:/docker-entrypoint-initdb.d/004_collaborator_profile_overrides.sql:ro
+      - ./006_hr_employee_imuv.sql:/docker-entrypoint-initdb.d/006_hr_employee_imuv.sql:ro
       - ./005_dimep_sync_issues.sql:/docker-entrypoint-initdb.d/005_dimep_sync_issues.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]

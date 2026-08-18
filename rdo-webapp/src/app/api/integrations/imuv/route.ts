@@ -11,7 +11,7 @@ function direction(value: string | null): ImuvDirection | null {
 }
 
 export async function GET(request: Request) {
-  const session = await requireAnyRole(["director", "admin"]);
+  const session = await requireAnyRole(["hr", "director", "admin"]);
   const selected = direction(new URL(request.url).searchParams.get("direction"));
   if (!selected) return Response.json({ error: "Direção inválida." }, { status: 400 });
   try {
@@ -24,7 +24,7 @@ export async function GET(request: Request) {
 }
 
 export async function POST(request: Request) {
-  const session = await requireAnyRole(["director", "admin"]);
+  const session = await requireAnyRole(["hr", "director", "admin"]);
   const body = await request.json().catch(() => null) as { direction?: unknown; digest?: unknown } | null;
   const selected = direction(typeof body?.direction === "string" ? body.direction : null);
   const expectedDigest = typeof body?.digest === "string" ? body.digest : "";

@@ -200,8 +200,8 @@ export async function createRdoAction(_state: RdoFormState, formData: FormData):
           `select
              exists(select 1 from rdo.tasks where organization_id = $1 and id = $2 and project_id = $3 and active) as task_ok,
              exists(select 1 from rdo.work_locations where organization_id = $1 and id = $4 and project_id = $3 and active) as location_ok,
-             (select count(*)::int from rdo.project_members where organization_id = $1 and project_id = $3
-                and collaborator_id = any($5::uuid[]) and active) = cardinality($5::uuid[]) as members_ok`,
+             (select count(*)::int from rdo.collaborators where organization_id = $1
+                and id = any($5::uuid[]) and active) = cardinality($5::uuid[]) as members_ok`,
           [session.organizationId, activity.taskId, input.projectId, activity.locationId, activity.collaboratorIds],
         );
         const row = scope.rows[0] as { task_ok: boolean; location_ok: boolean; members_ok: boolean } | undefined;
@@ -394,7 +394,7 @@ export async function createRdoAction(_state: RdoFormState, formData: FormData):
     if (error instanceof Error) {
       if (error.message === "RDO_ALREADY_EXISTS") return { error: "Já existe um RDO para este projeto e data." };
       if (error.message === "PROJECT_NOT_ALLOWED") return { error: "Você não tem acesso a este projeto." };
-      if (error.message === "INVALID_SCOPE") return { error: "Tarefa, local ou equipe não pertence ao projeto selecionado." };
+      if (error.message === "INVALID_SCOPE") return { error: "Tarefa/local não pertence ao projeto ou há um funcionário inativo na equipe." };
       if (error.message === "INVALID_RESOURCE") return { error: "Um material ou equipamento não pertence ao catálogo ativo." };
       if (error.message === "DIVERGENCE_REASON_REQUIRED") return { error: "Informe a justificativa de horário: não há cobertura DIMEP para toda a atividade." };
     }

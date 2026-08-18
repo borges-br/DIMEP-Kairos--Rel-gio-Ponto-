@@ -33,7 +33,8 @@ export async function externalRequest(
     if (tenant) requestHeaders.identifier = tenant;
     if (token) requestHeaders.key = token;
   }
-  if (options.body !== undefined) requestHeaders["Content-Type"] = "application/json";
+  const multipart = typeof FormData !== "undefined" && options.body instanceof FormData;
+  if (options.body !== undefined && !multipart) requestHeaders["Content-Type"] = "application/json";
 
   const response = await fetch(url, {
     method,
@@ -41,7 +42,7 @@ export async function externalRequest(
     redirect: "error",
     signal: AbortSignal.timeout(integrationTimeout(provider)),
     headers: requestHeaders,
-    body: options.body === undefined ? undefined : JSON.stringify(options.body),
+    body: options.body === undefined ? undefined : multipart ? options.body as FormData : JSON.stringify(options.body),
   });
   const responseText = await response.text();
   if (!response.ok) {

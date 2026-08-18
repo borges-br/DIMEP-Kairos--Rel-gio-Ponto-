@@ -7,7 +7,7 @@ import { redirect } from "next/navigation";
 import { integerEnv } from "@/lib/env";
 import { withTenant } from "@/lib/db";
 
-export type AppRole = "leader" | "foreman" | "manager" | "director" | "admin";
+export type AppRole = "leader" | "foreman" | "manager" | "hr" | "director" | "admin";
 
 export type SessionUser = {
   userId: string;

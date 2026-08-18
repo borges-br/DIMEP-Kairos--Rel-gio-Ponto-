@@ -6,6 +6,7 @@
 - `002_create_runtime_user.sh`: cria o login restrito usado pelo backend.
 - `003_field_diary_extensions.sql`: adiciona PT por atividade e transcrição de mídia.
 - `004_collaborator_profile_overrides.sql`: adiciona correções cadastrais locais sem sobrescrever as fontes sincronizadas.
+- `006_hr_employee_imuv.sql`: adiciona o perfil RH e campos cadastrais auditáveis usados na prévia de envio de funcionários ao IMUV.
 - `005_dimep_sync_issues.sql`: registra, sem vínculo obrigatório com RDO, pendências de identidade e pareamento vindas do DIMEP.
 - `DICIONARIO_DADOS_MVP.md`: modelo funcional para revisão do diretor.
 - `docker-compose.database.yml`: stack PostgreSQL para Portainer/Docker.

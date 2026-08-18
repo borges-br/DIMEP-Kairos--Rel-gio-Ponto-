@@ -18,7 +18,7 @@ const salt = randomBytes(16);
 const key = await scrypt(password, salt);
 const passwordHash = ["scrypt", 16384, 8, 1, salt.toString("base64url"), key.toString("base64url")].join("$");
 const roles = (process.env.ADMIN_ROLES ?? "admin,director").split(",").map((role) => role.trim()).filter(Boolean);
-const allowedRoles = new Set(["leader", "foreman", "manager", "director", "admin"]);
+const allowedRoles = new Set(["leader", "foreman", "manager", "hr", "director", "admin"]);
 if (roles.some((role) => !allowedRoles.has(role))) throw new Error("ADMIN_ROLES contém papel inválido");
 
 const pool = new pg.Pool({ connectionString: required("DATABASE_ADMIN_URL") });

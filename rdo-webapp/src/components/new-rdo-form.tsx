@@ -26,14 +26,17 @@ type ActivityDraft = {
 type MaterialDraft = { key: string; materialId: string; movement: "" | "used" | "received" | "missing"; quantity: string; unit: string };
 type EquipmentDraft = { key: string; equipmentId: string; usageMinutes: string; downtimeMinutes: string; downtimeReason: string };
 
-const emptyActivity = (key: string, taskId = ""): ActivityDraft => ({
+const emptyActivity = (key: string, project?: RdoFormProject, requestedTaskId = ""): ActivityDraft => {
+  const task = project?.tasks.find((item) => item.id === requestedTaskId) || project?.tasks[0];
+  const suggested = task?.assigneeIds.length ? task.assigneeIds : project?.members.map((member) => member.id) || [];
+  return ({
   key,
-  taskId,
-  locationId: "",
+  taskId: task?.id || "",
+  locationId: project?.locations[0]?.id || "",
   startTime: "07:30",
   endTime: "17:00",
   description: "",
-  collaboratorIds: [],
+  collaboratorIds: suggested,
   quantity: "",
   unit: "",
   progress: "",
@@ -41,7 +44,8 @@ const emptyActivity = (key: string, taskId = ""): ActivityDraft => ({
   ptNumber: "",
   ptOpenTime: "",
   ptCloseTime: "",
-});
+  });
+};
 
 function SubmitButton() {
   const { pending } = useFormStatus();
@@ -65,7 +69,8 @@ export function NewRdoForm({
 }) {
   const [state, action] = useActionState(createRdoAction, undefined);
   const [projectId, setProjectId] = useState(initialProjectId ?? projects[0]?.id ?? "");
-  const [activities, setActivities] = useState<ActivityDraft[]>([emptyActivity("activity-1", initialTaskId)]);
+  const initialProject = projects.find((item) => item.id === (initialProjectId ?? projects[0]?.id));
+  const [activities, setActivities] = useState<ActivityDraft[]>([emptyActivity("activity-1", initialProject, initialTaskId)]);
   const [dds, setDds] = useState(true);
   const [ppe, setPpe] = useState(true);
   const [unsafe, setUnsafe] = useState(false);
@@ -119,7 +124,14 @@ export function NewRdoForm({
 
   function changeProject(nextProjectId: string) {
     setProjectId(nextProjectId);
-    setActivities([emptyActivity(`activity-${Date.now()}`)]);
+    const nextProject = projects.find((item) => item.id === nextProjectId);
+    setActivities([emptyActivity(`activity-${Date.now()}`, nextProject)]);
+  }
+
+  function changeTask(activity: ActivityDraft, taskId: string) {
+    const task = project?.tasks.find((item) => item.id === taskId);
+    const suggested = task?.assigneeIds.length ? task.assigneeIds : project?.members.map((member) => member.id) || [];
+    updateActivity(activity.key, { taskId, collaboratorIds: suggested });
   }
 
   function toggleMember(activity: ActivityDraft, collaboratorId: string) {
@@ -156,8 +168,8 @@ export function NewRdoForm({
             <article className="activity-card" key={activity.key}>
               <div className="activity-title"><div><span>ATIVIDADE {index + 1}</span><h3>{activity.description || "Nova atividade"}</h3></div>{activities.length > 1 && <button type="button" className="text-button danger" onClick={() => setActivities((current) => current.filter((item) => item.key !== activity.key))}>Remover</button>}</div>
               <div className="form-grid two-columns">
-                <label className="field-group"><span>Tarefa IMUV <b>*</b></span><select className="input-field" value={activity.taskId} onChange={(event) => updateActivity(activity.key, { taskId: event.target.value })} required><option value="">Selecione…</option>{project?.tasks.map((task) => <option key={task.id} value={task.id}>{task.code} · {task.name}</option>)}</select></label>
-                <label className="field-group"><span>Frente / local <b>*</b></span><select className="input-field" value={activity.locationId} onChange={(event) => updateActivity(activity.key, { locationId: event.target.value })} required><option value="">Selecione…</option>{project?.locations.map((location) => <option key={location.id} value={location.id}>{location.label}</option>)}</select></label>
+                <label className="field-group"><span>Tarefa IMUV <b>*</b></span><select className="input-field" value={activity.taskId} onChange={(event) => changeTask(activity, event.target.value)} required><option value="">Selecione…</option>{project?.tasks.map((task) => <option key={task.id} value={task.id}>{task.code} · {task.name}</option>)}</select><small className="field-help">Tarefas ativas sincronizadas do projeto no IMUV.</small></label>
+                <label className="field-group"><span>Frente / local <b>*</b></span><select className="input-field" value={activity.locationId} onChange={(event) => updateActivity(activity.key, { locationId: event.target.value })} required><option value="">Selecione…</option>{project?.locations.map((location) => <option key={location.id} value={location.id}>{location.label}</option>)}</select><small className="field-help">Cadastro operacional interno do projeto; a importação cria o Local principal.</small></label>
               </div>
               <div className="form-grid time-grid">
                 <label className="field-group"><span>Início <b>*</b></span><input className="input-field" type="time" value={activity.startTime} onChange={(event) => updateActivity(activity.key, { startTime: event.target.value })} required /></label>
@@ -168,12 +180,12 @@ export function NewRdoForm({
               </div>
               <label className="field-group"><span>Serviço executado <b>*</b></span><textarea className="input-field" rows={3} value={activity.description} onChange={(event) => updateActivity(activity.key, { description: event.target.value })} minLength={10} maxLength={2000} required placeholder="Descreva objetivamente o que foi executado…" /></label>
               <div className="permit-box"><div className="permit-heading"><ShieldIcon /><div><strong>Permissão de Trabalho (PT)</strong><span>Opcional. Se informada, o número identifica a liberação desta tarefa.</span></div></div><div className="form-grid three-columns"><label className="field-group"><span>Número da PT</span><input className="input-field" value={activity.ptNumber} onChange={(event) => updateActivity(activity.key, { ptNumber: event.target.value })} maxLength={100} placeholder="Ex.: 45872" /></label><label className="field-group"><span>Abertura</span><input className="input-field" type="time" value={activity.ptOpenTime} onInput={(event) => updateActivity(activity.key, { ptOpenTime: event.currentTarget.value })} /></label><label className="field-group"><span>Fechamento</span><input className="input-field" type="time" value={activity.ptCloseTime} onInput={(event) => updateActivity(activity.key, { ptCloseTime: event.currentTarget.value })} /></label></div>{(activity.ptOpenTime || activity.ptCloseTime) && !activity.ptNumber && <p className="inline-warning"><WarningIcon />Informe o número da PT quando houver horário de abertura ou fechamento.</p>}</div>
-              <fieldset className="team-fieldset"><legend><UsersIcon /> Equipe nesta atividade <b>*</b></legend>{project?.members.length ? <div className="member-grid">{project.members.map((member) => <label className={`member-option ${activity.collaboratorIds.includes(member.id) ? "selected" : ""}`} key={member.id}><input type="checkbox" checked={activity.collaboratorIds.includes(member.id)} onChange={() => toggleMember(activity, member.id)} /><span><strong>{member.name}</strong><small>{member.jobTitle || "Função não informada"}</small></span></label>)}</div> : <p className="empty-copy">Nenhum colaborador vinculado a este projeto no IMUV.</p>}</fieldset>
+              <fieldset className="team-fieldset"><legend><UsersIcon /> Equipe nesta atividade <b>*</b></legend><p className="field-help">Pré-seleção: responsáveis da tarefa no IMUV; na ausência, equipe do projeto. Você pode incluir ou remover qualquer funcionário ativo.</p>{project?.collaborators.length ? <div className="member-grid">{project.collaborators.map((member) => <label className={`member-option ${activity.collaboratorIds.includes(member.id) ? "selected" : ""}`} key={member.id}><input type="checkbox" checked={activity.collaboratorIds.includes(member.id)} onChange={() => toggleMember(activity, member.id)} /><span><strong>{member.name}</strong><small>{member.jobTitle || "Função não informada"}{member.projectMember ? " · equipe do projeto" : " · cadastro geral"}</small></span></label>)}</div> : <p className="empty-copy">Nenhum funcionário ativo foi conciliado entre DIMEP, IMUV e banco local.</p>}</fieldset>
               <label className="field-group"><span>Justificativa se faltar cobertura DIMEP</span><textarea className="input-field" rows={2} value={activity.divergenceReason} onChange={(event) => updateActivity(activity.key, { divergenceReason: event.target.value })} maxLength={1000} placeholder="Ex.: batida de retorno ainda não sincronizada. Será exigida somente quando houver divergência." /></label>
             </article>
           ))}
         </div>
-        <button type="button" className="button button-secondary" onClick={() => setActivities((current) => [...current, emptyActivity(`activity-${Date.now()}`)])} disabled={activities.length >= 12}><PlusIcon />Adicionar outra atividade</button>
+        <button type="button" className="button button-secondary" onClick={() => setActivities((current) => [...current, emptyActivity(`activity-${Date.now()}`, project)])} disabled={activities.length >= 12}><PlusIcon />Adicionar outra atividade</button>
       </section>
 
       <section className="form-section">

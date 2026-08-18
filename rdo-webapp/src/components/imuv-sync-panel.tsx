@@ -34,7 +34,7 @@ export function ImuvSyncPanel() {
   }
 
   return <section className="panel imuv-sync-panel">
-    <div><span className="eyebrow">CONTROLE BIDIRECIONAL</span><h2>Sincronização IMUV</h2><p>Nenhuma alteração é aplicada antes da conferência. O envio está limitado aos campos documentados de projeto.</p></div>
+    <div><span className="eyebrow">CONTROLE BIDIRECIONAL</span><h2>Sincronização IMUV</h2><p>Nenhuma alteração é aplicada antes da conferência. A saída é restrita ao cadastro de funcionários: nome, CPF, e-mail, telefone e situação ativa.</p></div>
     <div className="sync-buttons">
       <button className="button button-primary" disabled={Boolean(loading)} onClick={() => load("pull")}>{loading === "pull" ? "Consultando…" : "Puxar informações do IMUV"}</button>
       <button className="button button-secondary" disabled={Boolean(loading)} onClick={() => load("push")}>{loading === "push" ? "Comparando…" : "Enviar alterações ao IMUV"}</button>

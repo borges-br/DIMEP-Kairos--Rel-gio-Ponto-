@@ -9,5 +9,5 @@ export function formatMinutes(value: number) {
 }
 
 export function roleLabel(role: string) {
-  return ({ leader: "Líder", foreman: "Encarregado", manager: "Gerente", director: "Diretor", admin: "Administrador" } as Record<string, string>)[role] ?? role;
+  return ({ leader: "Líder", foreman: "Encarregado", manager: "Gerente", hr: "RH", director: "Diretor", admin: "Administrador" } as Record<string, string>)[role] ?? role;
 }

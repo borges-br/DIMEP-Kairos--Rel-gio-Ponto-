@@ -178,7 +178,7 @@ export async function getRdoDetail(rdoId: string) {
       client.query<{
         id: string; sequence_number: number; task_code: string; task_name: string; location_label: string;
         starts_at: string; ends_at: string; execution_description: string; quantity: string | null;
-        unit: string | null; daily_progress_percent: string | null; member_count: string;
+        unit: string | null; daily_progress_percent: string | null; member_count: string; member_names: string | null;
         permit_number: string | null; permit_status: string | null; permit_opened_at: string | null; permit_closed_at: string | null;
       }>(
         `select g.id, g.sequence_number, t.code as task_code, t.name as task_name, l.label as location_label,
@@ -186,6 +186,8 @@ export async function getRdoDetail(rdoId: string) {
                 to_char(g.group_end_at at time zone o.timezone, 'HH24:MI') as ends_at,
                 g.execution_description, g.quantity::text, g.unit, g.daily_progress_percent::text,
                 count(a.id) filter (where a.allocation_status = 'active')::text as member_count,
+                string_agg(distinct c.full_name, ', ' order by c.full_name)
+                  filter (where a.allocation_status = 'active') as member_names,
                 wp.permit_number, wp.status as permit_status,
                 to_char(wp.opened_at at time zone o.timezone, 'HH24:MI') as permit_opened_at,
                 to_char(wp.closed_at at time zone o.timezone, 'HH24:MI') as permit_closed_at
@@ -195,6 +197,7 @@ export async function getRdoDetail(rdoId: string) {
            join rdo.tasks t on t.id = g.task_id
            join rdo.work_locations l on l.id = g.location_id
            left join rdo.work_allocations a on a.activity_group_id = g.id
+           left join rdo.collaborators c on c.id = a.collaborator_id
            left join rdo.rdo_work_permits wp on wp.activity_group_id = g.id
           where g.organization_id = $1 and g.rdo_version_id = $2
           group by g.id, t.code, t.name, l.label, o.timezone, wp.permit_number, wp.status, wp.opened_at, wp.closed_at order by g.sequence_number`,
@@ -266,20 +269,44 @@ export async function getHoursOverview() {
       total_minutes: number;
       allocation_count: string;
       divergence_count: string;
+      source: "rdo" | "dimep";
+      status: string;
     }>(
-      `select r.work_date::text, c.full_name as collaborator_name,
-              round(sum(extract(epoch from (a.declared_end_at - a.declared_start_at)) / 60))::int as total_minutes,
-              count(distinct a.id)::text as allocation_count,
-              count(distinct d.id)::text as divergence_count
-         from rdo.work_allocations a
-         join rdo.rdo_versions v on v.id = a.rdo_version_id
-         join rdo.rdos r on r.id = v.rdo_id
-         join rdo.collaborators c on c.id = a.collaborator_id
-         left join rdo.time_divergences d on d.allocation_id = a.id
-        where a.organization_id = $1 and a.allocation_status = 'active'
-        group by r.work_date, c.id, c.full_name
-        order by r.work_date desc, c.full_name
-        limit 50`,
+      `with allocated as (
+         select r.work_date, c.id as collaborator_id, c.full_name as collaborator_name,
+                round(sum(extract(epoch from (a.declared_end_at - a.declared_start_at)) / 60))::int as total_minutes,
+                count(distinct a.id)::text as allocation_count,
+                count(distinct d.id)::text as divergence_count,
+                'rdo'::text as source, max(v.status)::text as status
+           from rdo.work_allocations a
+           join rdo.rdo_versions v on v.id = a.rdo_version_id
+           join rdo.rdos r on r.id = v.rdo_id
+           join rdo.collaborators c on c.id = a.collaborator_id
+           left join rdo.time_divergences d on d.allocation_id = a.id and d.review_status = 'pending'
+          where a.organization_id = $1 and a.allocation_status = 'active'
+          group by r.work_date, c.id, c.full_name
+       ), punched as (
+         select ts.work_date, c.id as collaborator_id, c.full_name as collaborator_name,
+                round(sum(extract(epoch from (ts.original_end_at - ts.original_start_at)) / 60))::int as total_minutes,
+                count(distinct ts.id)::text as allocation_count,
+                (select count(*)::text from rdo.dimep_sync_issues di
+                  where di.organization_id=$1 and di.collaborator_id=ts.collaborator_id
+                    and di.work_date=ts.work_date and di.resolution_status='open') as divergence_count,
+                'dimep'::text as source, 'awaiting_rdo'::text as status
+           from rdo.time_segments ts
+           join rdo.collaborators c on c.id = ts.collaborator_id
+          where ts.organization_id = $1 and ts.segment_status = 'closed'
+            and not exists (
+              select 1 from allocated a
+               where a.work_date = ts.work_date and a.collaborator_id = ts.collaborator_id
+            )
+          group by ts.work_date, ts.collaborator_id, c.id, c.full_name
+       )
+       select work_date::text, collaborator_name, total_minutes, allocation_count,
+              divergence_count, source, status
+         from (select * from allocated union all select * from punched) overview
+        order by work_date desc, collaborator_name
+        limit 100`,
       [session.organizationId],
     );
     const exportable = await client.query<{ count: string }>(
@@ -320,9 +347,10 @@ export type RdoFormProject = {
   id: string;
   code: string;
   name: string;
-  tasks: { id: string; code: string; name: string }[];
+  tasks: { id: string; code: string; name: string; assigneeIds: string[] }[];
   locations: { id: string; label: string }[];
   members: { id: string; name: string; jobTitle: string | null }[];
+  collaborators: { id: string; name: string; jobTitle: string | null; projectMember: boolean }[];
 };
 
 export type RdoCatalogOption = { id: string; code?: string; name: string; unit?: string };
@@ -356,6 +384,21 @@ export async function getRdoFormOptions() {
         where pm.organization_id = $1 and pm.active and c.active order by c.full_name`,
       [session.organizationId],
     );
+    const taskAssignees = await client.query<{ task_id: string; collaborator_id: string }>(
+      `select ta.task_id, ta.collaborator_id from rdo.task_assignees ta
+        join rdo.collaborators c on c.id = ta.collaborator_id
+       where ta.organization_id = $1 and ta.active and c.active`,
+      [session.organizationId],
+    );
+    const collaborators = await client.query<{ id: string; name: string; job_title: string | null }>(
+      `select c.id, coalesce(o.full_name_override, c.full_name) as name,
+              coalesce(o.job_title_override, c.job_title) as job_title
+         from rdo.collaborators c
+         left join rdo.collaborator_profile_overrides o on o.collaborator_id = c.id
+        where c.organization_id = $1 and coalesce(o.active_override, c.active)
+        order by coalesce(o.full_name_override, c.full_name)`,
+      [session.organizationId],
+    );
     const materials = await client.query<{ id: string; name: string; default_unit: string }>(
       "select id, name, default_unit from rdo.material_catalog where organization_id = $1 and active order by name",
       [session.organizationId],
@@ -366,9 +409,16 @@ export async function getRdoFormOptions() {
     );
     const options: RdoFormProject[] = projects.rows.map((project) => ({
       ...project,
-      tasks: tasks.rows.filter((task) => task.project_id === project.id).map(({ id, code, name }) => ({ id, code, name })),
+      tasks: tasks.rows.filter((task) => task.project_id === project.id).map(({ id, code, name }) => ({
+        id, code, name,
+        assigneeIds: taskAssignees.rows.filter((item) => item.task_id === id).map((item) => item.collaborator_id),
+      })),
       locations: locations.rows.filter((location) => location.project_id === project.id).map(({ id, label }) => ({ id, label })),
       members: members.rows.filter((member) => member.project_id === project.id).map(({ id, name, job_title }) => ({ id, name, jobTitle: job_title })),
+      collaborators: collaborators.rows.map(({ id, name, job_title }) => ({
+        id, name, jobTitle: job_title,
+        projectMember: members.rows.some((member) => member.project_id === project.id && member.id === id),
+      })),
     }));
     return {
       session,
@@ -392,7 +442,10 @@ export async function getEmployees(search = "") {
               coalesce(o.employee_number_override, c.employee_number) as employee_number,
               coalesce(o.job_title_override, c.job_title) as job_title,
               coalesce(o.department_override, c.department) as department,
-              c.employment_status, (o.collaborator_id is not null) as has_override,
+              case when coalesce(o.active_override,c.active) then
+                case when c.employment_status='inactive' and o.active_override is true then 'active' else c.employment_status end
+              else 'inactive' end as employment_status,
+              (o.collaborator_id is not null) as has_override,
               count(distinct pm.project_id) filter (where pm.active)::text as project_count,
               count(distinct a.id) filter (where a.allocation_status = 'active')::text as allocation_count,
               (count(distinct d.id) filter (where d.review_status = 'pending')
@@ -403,12 +456,12 @@ export async function getEmployees(search = "") {
          left join rdo.work_allocations a on a.collaborator_id = c.id
          left join rdo.time_divergences d on d.allocation_id = a.id
          left join rdo.dimep_sync_issues di on di.collaborator_id = c.id
-        where c.organization_id = $1 and c.active
+        where c.organization_id = $1 and coalesce(o.active_override, c.active)
           and ($2 = '' or coalesce(o.full_name_override, c.full_name) ilike '%' || $2 || '%'
             or coalesce(o.employee_number_override, c.employee_number, '') ilike '%' || $2 || '%'
             or coalesce(c.cpf_digits, '') like '%' || regexp_replace($2, '[^0-9]', '', 'g') || '%')
         group by c.id, o.collaborator_id, o.full_name_override, o.employee_number_override,
-                 o.job_title_override, o.department_override
+                 o.job_title_override, o.department_override, o.active_override
         order by coalesce(o.full_name_override, c.full_name) limit 200`,
       [session.organizationId, query],
     );
@@ -425,8 +478,11 @@ export async function getEmployeeDetail(collaboratorId: string) {
       source_employee_number: string | null; employee_number: string | null;
       source_job_title: string | null; job_title: string | null;
       source_department: string | null; department: string | null; employment_status: string;
+      source_email: string | null; email: string | null; source_phone: string | null; phone: string | null;
+      source_active: boolean; active: boolean;
       full_name_override: string | null; employee_number_override: string | null;
-      job_title_override: string | null; department_override: string | null; override_reason: string | null;
+      job_title_override: string | null; department_override: string | null; email_override: string | null;
+      phone_override: string | null; active_override: boolean | null; override_reason: string | null;
       override_updated_at: Date | null;
     }>(
       `select c.id, c.full_name as source_name, coalesce(o.full_name_override, c.full_name) as name,
@@ -434,8 +490,13 @@ export async function getEmployeeDetail(collaboratorId: string) {
               coalesce(o.employee_number_override, c.employee_number) as employee_number,
               c.job_title as source_job_title, coalesce(o.job_title_override, c.job_title) as job_title,
               c.department as source_department, coalesce(o.department_override, c.department) as department,
-              c.employment_status, o.full_name_override, o.employee_number_override,
-              o.job_title_override, o.department_override, o.reason as override_reason,
+              c.email as source_email, coalesce(o.email_override,c.email) as email,
+              c.phone as source_phone, coalesce(o.phone_override,c.phone) as phone,
+              c.active as source_active, coalesce(o.active_override,c.active) as active,
+              case when coalesce(o.active_override,c.active) then c.employment_status else 'inactive' end as employment_status,
+              o.full_name_override, o.employee_number_override,
+              o.job_title_override, o.department_override, o.email_override, o.phone_override,
+              o.active_override, o.reason as override_reason,
               o.updated_at as override_updated_at
          from rdo.collaborators c
          left join rdo.collaborator_profile_overrides o on o.collaborator_id = c.id
@@ -444,7 +505,7 @@ export async function getEmployeeDetail(collaboratorId: string) {
     );
     if (!profile.rows[0]) return null;
 
-    const [projects, workHistory, occurrences, quality, dimepIssues] = await Promise.all([
+    const [projects, workHistory, occurrences, quality, dimepIssues, account] = await Promise.all([
       client.query<{ id: string; code: string; name: string; status: string; source: string }>(
         `select p.id, p.code, p.name, p.status_normalized as status, pm.source
            from rdo.project_members pm join rdo.projects p on p.id = pm.project_id
@@ -502,7 +563,16 @@ export async function getEmployeeDetail(collaboratorId: string) {
           order by work_date desc nulls last,first_seen_at desc limit 30`,
         [session.organizationId, collaboratorId],
       ),
+      client.query<{ user_id: string; display_name: string; email: string | null; phone_e164: string | null; active: boolean; roles: string[] }>(
+        `select u.id as user_id,u.display_name,u.email::text,u.phone_e164,u.active,
+                coalesce(array_agg(ur.role order by ur.role) filter(where ur.active),'{}') as roles
+           from rdo.organization_users ou join rdo.app_users u on u.id=ou.user_id
+           left join rdo.organization_user_roles ur on ur.organization_id=ou.organization_id and ur.user_id=ou.user_id
+          where ou.organization_id=$1 and ou.collaborator_id=$2
+          group by u.id,u.display_name,u.email,u.phone_e164,u.active`,
+        [session.organizationId, collaboratorId],
+      ),
     ]);
-    return { session, employee: profile.rows[0], projects: projects.rows, workHistory: workHistory.rows, occurrences: occurrences.rows, quality: quality.rows, dimepIssues: dimepIssues.rows };
+    return { session, employee: profile.rows[0], account: account.rows[0] ?? null, projects: projects.rows, workHistory: workHistory.rows, occurrences: occurrences.rows, quality: quality.rows, dimepIssues: dimepIssues.rows };
   });
 }

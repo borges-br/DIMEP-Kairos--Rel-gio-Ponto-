@@ -63,7 +63,7 @@ async function pages(path: string, extras: Record<string, string> = {}) {
 export async function fetchImuvData(): Promise<ImuvData> {
   const [people, collaborators, projects, tasks] = await Promise.all([
     pages(resource("PEOPLE")), pages(resource("COLLABORATORS")),
-    pages(resource("PROJECTS"), { expand: "members" }), pages(resource("TASKS")),
+    pages(resource("PROJECTS"), { expand: "members" }), pages(resource("TASKS"), { expand: "taskCollaborators" }),
   ]);
   return { people, collaborators, projects, tasks };
 }
@@ -76,9 +76,15 @@ const fieldDiffs = (fields: Array<[string, unknown, unknown]>) => fields.flatMap
 async function localData(client: PoolClient, organizationId: string) {
   const [clients, collaborators, projects, tasks] = await Promise.all([
     client.query("select imuv_external_id,legal_name,document_digits,active from rdo.clients where organization_id=$1", [organizationId]),
-    client.query(`select er.external_id,c.full_name,c.cpf_digits,c.active from rdo.collaborator_external_refs er
+    client.query(`select er.external_id, c.full_name as source_full_name,
+                         coalesce(o.full_name_override,c.full_name) as full_name,
+                         c.cpf_digits, c.email as source_email, coalesce(o.email_override,c.email) as email,
+                         c.phone as source_phone, coalesce(o.phone_override,c.phone) as phone,
+                         c.active as source_active, coalesce(o.active_override,c.active) as active
+                    from rdo.collaborator_external_refs er
                    join rdo.collaborators c on c.id=er.collaborator_id
                    join rdo.integration_connections ic on ic.id=er.connection_id and ic.organization_id=er.organization_id
+              left join rdo.collaborator_profile_overrides o on o.collaborator_id=c.id
                   where er.organization_id=$1 and ic.provider='imuv'`, [organizationId]),
     client.query("select imuv_external_id,code,name,starts_on,active from rdo.projects where organization_id=$1", [organizationId]),
     client.query("select imuv_external_id,code,name,description,active from rdo.tasks where organization_id=$1", [organizationId]),
@@ -104,7 +110,7 @@ export async function previewImuv(client: PoolClient, organizationId: string, di
       const id = asText(row.id); if (!id) continue;
       const old = local.collaborators.get(id); const name = asText(row.name) || `Colaborador ${id}`;
       const rawCpf = asDigits(row.cpf_cnpj); const cpf = rawCpf?.length === 11 ? rawCpf : null;
-      const fields = fieldDiffs([["Nome", old?.full_name, name], ["CPF", old?.cpf_digits, cpf], ["Ativo", old?.active, active(row.active)]]);
+      const fields = fieldDiffs([["Nome", old?.source_full_name, name], ["CPF", old?.cpf_digits, cpf], ["E-mail", old?.source_email, row.email], ["Telefone", old?.source_phone, row.phone], ["Ativo", old?.source_active, active(row.active)]]);
       if (!old || fields.length) items.push({ entity: "collaborator", externalId: id, label: name, action: old ? "update" : "create", fields });
     }
     const projectIds = new Set(data.projects.map((row) => asText(row.id)).filter(Boolean));
@@ -125,11 +131,15 @@ export async function previewImuv(client: PoolClient, organizationId: string, di
       if (!old || fields.length) items.push({ entity: "task", externalId: id, label: `${code} · ${name}`, action: old ? "update" : "create", fields });
     }
   } else {
-    const remote = new Map(data.projects.map((row) => [asText(row.id), row]));
-    for (const [id, project] of local.projects) {
+    const remote = new Map(data.collaborators.flatMap((row) => { const id = asText(row.id); return id ? [[id, row] as const] : []; }));
+    for (const [id, collaborator] of local.collaborators) {
       const row = remote.get(id); if (!row) continue;
-      const fields = fieldDiffs([["Código", row.code, project.code], ["Nome", row.name, project.name], ["Data inicial", date(row.start_date), date(project.starts_on)]]);
-      if (fields.length) items.push({ entity: "project", externalId: id, label: `${project.code} · ${project.name}`, action: "update", fields });
+      const fields = fieldDiffs([
+        ["Nome", row.name, collaborator.full_name], ["CPF", asDigits(row.cpf_cnpj), collaborator.cpf_digits],
+        ["E-mail", row.email, collaborator.email], ["Telefone", row.phone, collaborator.phone],
+        ["Ativo", active(row.active), collaborator.active],
+      ]);
+      if (fields.length) items.push({ entity: "collaborator", externalId: id, label: asText(collaborator.full_name) || `Colaborador ${id}`, action: "update", fields });
     }
   }
   items.sort((a, b) => `${a.entity}:${a.externalId}`.localeCompare(`${b.entity}:${b.externalId}`));
@@ -175,14 +185,14 @@ export async function applyImuvPull(client: PoolClient, organizationId: string, 
   }
   const collaboratorIds = new Map<string,string>();
   for (const row of data.collaborators) {
-    const id=asText(row.id); if(!id) continue; const name=asText(row.name)||`Colaborador ${id}`; const rawCpf=asDigits(row.cpf_cnpj); const cpf=rawCpf?.length===11?rawCpf:null;
+    const id=asText(row.id); if(!id) continue; const name=asText(row.name)||`Colaborador ${id}`; const rawCpf=asDigits(row.cpf_cnpj); const cpf=rawCpf?.length===11?rawCpf:null; const email=asText(row.email); const phone=asText(row.phone);
     const linked=await client.query<{id:string}>(`select c.id from rdo.collaborator_external_refs er join rdo.collaborators c on c.id=er.collaborator_id
       where er.organization_id=$1 and er.connection_id=$2 and er.external_id=$3`,[organizationId,connectionId,id]);
     let collaboratorId=linked.rows[0]?.id;
     if(!collaboratorId&&validCpf(cpf)){const same=await client.query<{id:string}>("select id from rdo.collaborators where organization_id=$1 and cpf_digits=$2 and cpf_is_valid limit 1",[organizationId,cpf]);collaboratorId=same.rows[0]?.id;}
-    if(collaboratorId) await client.query(`update rdo.collaborators set full_name=$3,normalized_name=$4,cpf_raw=$5,cpf_digits=$6,cpf_is_valid=$7,employment_status=$8,active=$9 where organization_id=$1 and id=$2`,[organizationId,collaboratorId,name,normalized(name),asText(row.cpf_cnpj),cpf,validCpf(cpf),active(row.active)?"active":"inactive",active(row.active)]);
-    else {const made=await client.query<{id:string}>(`insert into rdo.collaborators (organization_id,full_name,normalized_name,cpf_raw,cpf_digits,cpf_is_valid,employment_status,active)
-      values ($1,$2,$3,$4,$5,$6,$7,$8) returning id`,[organizationId,name,normalized(name),asText(row.cpf_cnpj),cpf,validCpf(cpf),active(row.active)?"active":"inactive",active(row.active)]);collaboratorId=made.rows[0].id;}
+    if(collaboratorId) await client.query(`update rdo.collaborators set full_name=$3,normalized_name=$4,cpf_raw=$5,cpf_digits=$6,cpf_is_valid=$7,employment_status=$8,active=$9,email=$10,phone=$11 where organization_id=$1 and id=$2`,[organizationId,collaboratorId,name,normalized(name),asText(row.cpf_cnpj),cpf,validCpf(cpf),active(row.active)?"active":"inactive",active(row.active),email,phone]);
+    else {const made=await client.query<{id:string}>(`insert into rdo.collaborators (organization_id,full_name,normalized_name,cpf_raw,cpf_digits,cpf_is_valid,employment_status,active,email,phone)
+      values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) returning id`,[organizationId,name,normalized(name),asText(row.cpf_cnpj),cpf,validCpf(cpf),active(row.active)?"active":"inactive",active(row.active),email,phone]);collaboratorId=made.rows[0].id;}
     await client.query(`insert into rdo.collaborator_external_refs (organization_id,collaborator_id,connection_id,external_id,external_name,external_document_raw,external_document_digits,last_seen_at)
       values ($1,$2,$3,$4,$5,$6,$7,now()) on conflict (connection_id,external_id) do update set collaborator_id=excluded.collaborator_id,external_name=excluded.external_name,external_document_raw=excluded.external_document_raw,external_document_digits=excluded.external_document_digits,last_seen_at=now()`,[organizationId,collaboratorId,connectionId,id,name,asText(row.cpf_cnpj),cpf]);
     collaboratorIds.set(id,collaboratorId);written+=1;await saveSnapshot(client,organizationId,connectionId,runId,"collaborator",row);
@@ -197,7 +207,11 @@ export async function applyImuvPull(client: PoolClient, organizationId: string, 
     await client.query(`insert into rdo.work_locations (organization_id,project_id,location_type,label,normalized_label,active) values ($1,$2,'front','Local principal','LOCAL PRINCIPAL',true) on conflict (project_id,normalized_label) do update set active=true`,[organizationId,saved.rows[0].id]);
   }
   for(const row of data.tasks){const id=asText(row.id);if(!id)continue;const projectId=projectIds.get(taskProject(row)||"");if(!projectId)continue;const name=asText(row.name)||`Tarefa ${id}`;const code=asText(row.code)||id;const completed=Boolean(date(row.date_finished));
-    await client.query(`insert into rdo.tasks (organization_id,project_id,imuv_external_id,code,name,normalized_name,description,status_raw,status_normalized,active,source_updated_at) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) on conflict (organization_id,imuv_external_id) do update set project_id=excluded.project_id,code=excluded.code,name=excluded.name,normalized_name=excluded.normalized_name,description=excluded.description,status_raw=excluded.status_raw,status_normalized=excluded.status_normalized,active=excluded.active,source_updated_at=excluded.source_updated_at`,[organizationId,projectId,id,code,name,normalized(name),asText(row.description),asText(row.status),completed?"completed":active(row.active)?"active":"cancelled",active(row.active),asText(row.updated_at)]);written+=1;await saveSnapshot(client,organizationId,connectionId,runId,"task",row);}
+    const savedTask=await client.query<{id:string}>(`insert into rdo.tasks (organization_id,project_id,imuv_external_id,code,name,normalized_name,description,status_raw,status_normalized,active,source_updated_at) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) on conflict (organization_id,imuv_external_id) do update set project_id=excluded.project_id,code=excluded.code,name=excluded.name,normalized_name=excluded.normalized_name,description=excluded.description,status_raw=excluded.status_raw,status_normalized=excluded.status_normalized,active=excluded.active,source_updated_at=excluded.source_updated_at returning id`,[organizationId,projectId,id,code,name,normalized(name),asText(row.description),asText(row.status),completed?"completed":active(row.active)?"active":"cancelled",active(row.active),asText(row.updated_at)]);
+    await client.query("update rdo.task_assignees set active=false where organization_id=$1 and task_id=$2 and source='imuv'",[organizationId,savedTask.rows[0].id]);
+    const rawAssignees=Array.isArray(row.taskCollaborators)?row.taskCollaborators:Array.isArray(row.task_collaborators)?row.task_collaborators:Array.isArray(row.collaborators)?row.collaborators:[];
+    for(const entry of rawAssignees){const nested=isObject(entry)&&isObject(entry.collaborator)?entry.collaborator:null;const externalId=isObject(entry)?asText(entry.collaborator_id??nested?.id??entry.id):asText(entry);const collaboratorId=externalId?collaboratorIds.get(externalId):null;if(collaboratorId)await client.query(`insert into rdo.task_assignees (organization_id,task_id,collaborator_id,source,active,source_updated_at) values ($1,$2,$3,'imuv',true,$4) on conflict (task_id,collaborator_id) do update set active=true,source_updated_at=excluded.source_updated_at`,[organizationId,savedTask.rows[0].id,collaboratorId,asText(row.updated_at)]);}
+    written+=1;await saveSnapshot(client,organizationId,connectionId,runId,"task",row);}
   await client.query(`update rdo.sync_runs set status=$3,records_written=$4,records_rejected=$5,finished_at=now() where organization_id=$1 and id=$2`,[organizationId,runId,rejected?"partial":"succeeded",written,rejected]);
   await client.query("update rdo.integration_connections set last_success_at=now() where organization_id=$1 and id=$2",[organizationId,connectionId]);
   await client.query(`insert into rdo.audit_events (organization_id,actor_user_id,entity_table,entity_id,action,new_data,reason) values ($1,$2,'sync_runs',$3,'insert',$4::jsonb,'Importação IMUV confirmada')`,[organizationId,userId,runId,JSON.stringify({digest:preview.digest,written,rejected})]);
@@ -205,7 +219,18 @@ export async function applyImuvPull(client: PoolClient, organizationId: string, 
 }
 
 export async function applyImuvPush(client:PoolClient,organizationId:string,userId:string,preview:ImuvPreview){
-  const connectionId=await getConnection(client,organizationId);const runResult=await client.query<{id:string}>(`insert into rdo.sync_runs (organization_id,connection_id,object_type,direction,status,records_read,started_at) values ($1,$2,'project','outbound','running',$3,now()) returning id`,[organizationId,connectionId,preview.items.length]);const runId=runResult.rows[0].id;let written=0;const errors:string[]=[];
-  for(const item of preview.items.filter((i)=>i.entity==="project"&&i.action==="update")){const result=await client.query<{code:string;name:string;starts_on:string|null}>("select code,name,starts_on from rdo.projects where organization_id=$1 and imuv_external_id=$2",[organizationId,item.externalId]);const project=result.rows[0];if(!project?.starts_on){errors.push(`${item.label}: data inicial obrigatória`);continue;}try{await externalRequest("IMUV",`${resource("PROJECTS")}/${encodeURIComponent(item.externalId)}`,{method:"PUT",body:{name:project.name,code:project.code,start_date:date(project.starts_on)}});written+=1;}catch(error){errors.push(`${item.label}: ${error instanceof Error?error.message:"erro desconhecido"}`);}}
-  const status=errors.length?(written?"partial":"failed"):"succeeded";await client.query(`update rdo.sync_runs set status=$3,records_written=$4,records_rejected=$5,error_summary=$6,finished_at=now() where organization_id=$1 and id=$2`,[organizationId,runId,status,written,errors.length,errors.join(" | ").slice(0,4000)||null]);await client.query(`insert into rdo.audit_events (organization_id,actor_user_id,entity_table,entity_id,action,new_data,reason) values ($1,$2,'sync_runs',$3,'export',$4::jsonb,'Envio de projetos ao IMUV confirmado')`,[organizationId,userId,runId,JSON.stringify({digest:preview.digest,written,errors:errors.length})]);return{runId,written,rejected:errors.length,errors};
+  const connectionId=await getConnection(client,organizationId);const runResult=await client.query<{id:string}>(`insert into rdo.sync_runs (organization_id,connection_id,object_type,direction,status,records_read,started_at) values ($1,$2,'collaborator','outbound','running',$3,now()) returning id`,[organizationId,connectionId,preview.items.length]);const runId=runResult.rows[0].id;let written=0;const errors:string[]=[];
+  for(const item of preview.items.filter((i)=>i.entity==="collaborator"&&i.action==="update")){
+    const result=await client.query<{full_name:string;cpf_digits:string|null;email:string|null;phone:string|null;active:boolean}>(`select coalesce(o.full_name_override,c.full_name) as full_name,c.cpf_digits,
+      coalesce(o.email_override,c.email) as email,coalesce(o.phone_override,c.phone) as phone,
+      coalesce(o.active_override,c.active) as active from rdo.collaborator_external_refs er
+      join rdo.collaborators c on c.id=er.collaborator_id
+      left join rdo.collaborator_profile_overrides o on o.collaborator_id=c.id
+      where er.organization_id=$1 and er.external_id=$2 and er.connection_id=$3`,[organizationId,item.externalId,connectionId]);
+    const collaborator=result.rows[0];if(!collaborator){errors.push(`${item.label}: vínculo IMUV não encontrado`);continue;}
+    const form=new FormData();form.set("name",collaborator.full_name);form.set("active",collaborator.active?"1":"0");
+    if(collaborator.cpf_digits)form.set("cpf_cnpj",collaborator.cpf_digits);if(collaborator.email)form.set("email",collaborator.email);if(collaborator.phone)form.set("phone",collaborator.phone);
+    try{await externalRequest("IMUV",`${resource("COLLABORATORS")}/${encodeURIComponent(item.externalId)}`,{method:"PUT",body:form});written+=1;}catch(error){errors.push(`${item.label}: ${error instanceof Error?error.message:"erro desconhecido"}`);}
+  }
+  const status=errors.length?(written?"partial":"failed"):"succeeded";await client.query(`update rdo.sync_runs set status=$3,records_written=$4,records_rejected=$5,error_summary=$6,finished_at=now() where organization_id=$1 and id=$2`,[organizationId,runId,status,written,errors.length,errors.join(" | ").slice(0,4000)||null]);await client.query(`insert into rdo.audit_events (organization_id,actor_user_id,entity_table,entity_id,action,new_data,reason) values ($1,$2,'sync_runs',$3,'export',$4::jsonb,'Envio cadastral de funcionários ao IMUV confirmado')`,[organizationId,userId,runId,JSON.stringify({digest:preview.digest,written,errors:errors.length})]);return{runId,written,rejected:errors.length,errors};
 }
