@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Breadcrumbs } from "@/components/breadcrumbs";
 import { CloudIcon, DatabaseIcon, ShieldIcon } from "@/components/icons";
+import { ImuvSyncPanel } from "@/components/imuv-sync-panel";
 import { getSettingsData } from "@/lib/dal";
 import { roleLabel } from "@/lib/format";
 
@@ -21,6 +22,7 @@ export default async function SettingsPage() {
       <article className="integration-card"><span className="integration-icon imuv"><CloudIcon /></span><div className="integration-title"><div><span>GESTÃO DE PROJETOS</span><h2>IMUV</h2></div><ConfigStatus configured={env.imuv.configured} /></div><p>Sincroniza projetos, tarefas, clientes e equipes; prepara a exportação de horas.</p><dl><div><dt>Variáveis do servidor</dt><dd>{env.imuv.configured ? "Completas" : `${env.imuv.missing.length} pendente(s)`}</dd></div><div><dt>Conexão do tenant</dt><dd>{connection("imuv")?.enabled ? "Ativa" : "Não cadastrada"}</dd></div><div><dt>Última sincronização</dt><dd>{connection("imuv")?.last_status ?? "Ainda não executada"}</dd></div></dl></article>
       <article className="integration-card"><span className="integration-icon storage"><DatabaseIcon /></span><div className="integration-title"><div><span>EVIDÊNCIAS</span><h2>Armazenamento</h2></div><ConfigStatus configured={env.storage.configured} /></div><p>Fotos, vídeos e documentos ficam fora do banco, com hash e metadados auditáveis.</p><dl><div><dt>Provedor</dt><dd>{env.storage.provider}</dd></div><div><dt>Endpoint</dt><dd>{env.storage.endpointConfigured ? "Definido" : "Pendente"}</dd></div><div><dt>Credenciais</dt><dd>{env.storage.configured ? "Completas" : `${env.storage.missing.length} pendente(s)`}</dd></div></dl></article>
     </div>
+    {session.roles.some((role) => role === "admin" || role === "director") && <ImuvSyncPanel />}
     <section className="security-panel"><ShieldIcon /><div><h2>Segurança e acesso</h2><p>Usuário: <strong>{session.displayName}</strong> · Perfis: {session.roles.map(roleLabel).join(", ")}. O webapp usa sessão HttpOnly, isolamento por empresa no banco e integrações somente pelo backend.</p></div></section>
     <p className="settings-note">As chaves devem ser configuradas como secrets da Stack no Portainer a partir do <code>.env.example</code>. Elas não devem ser cadastradas por telas do navegador.</p>
   </div>;

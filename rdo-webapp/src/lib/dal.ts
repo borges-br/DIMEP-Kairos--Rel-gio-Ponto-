@@ -88,8 +88,8 @@ export async function getProjectDetail(projectId: string) {
   if (!/^[0-9a-f-]{36}$/i.test(projectId)) return null;
   const allProjects = canSeeAllProjects(session.roles);
   return withTenant(session.organizationId, async (client) => {
-    const project = await client.query<{ id: string; code: string; name: string; client_name: string }>(
-      `select p.id, p.code, p.name, c.legal_name as client_name
+    const project = await client.query<{ id: string; code: string; name: string; starts_on: string | null; client_name: string }>(
+      `select p.id, p.code, p.name, p.starts_on, c.legal_name as client_name
          from rdo.projects p join rdo.clients c on c.id = p.client_id
         where p.organization_id = $1 and p.id = $2 and p.active
           and ($3::boolean or exists (

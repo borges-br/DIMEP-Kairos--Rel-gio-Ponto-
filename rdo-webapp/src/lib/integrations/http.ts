@@ -2,29 +2,59 @@ import "server-only";
 
 import { integrationTimeout } from "@/lib/integrations/config";
 
-export async function externalGet(
-  provider: "IMUV" | "DIMEP",
-  path: string,
-): Promise<unknown> {
+type ExternalMethod = "GET" | "POST" | "PUT" | "DELETE";
+
+function externalUrl(provider: "IMUV" | "DIMEP", path: string) {
   const baseText = process.env[`${provider}_API_BASE_URL`]?.trim();
-  const token = process.env[`${provider}_API_TOKEN`]?.trim();
   if (!baseText) throw new Error(`${provider}: URL da API não configurada`);
   if (!path || /^https?:\/\//i.test(path)) throw new Error(`${provider}: caminho de API inválido`);
 
-  const base = new URL(baseText);
-  const url = new URL(path, base);
-  if (url.origin !== base.origin) throw new Error(`${provider}: origem externa não permitida`);
+  const base = new URL(baseText.endsWith("/") ? baseText : `${baseText}/`);
+  const cleanPath = path.replace(/^\/+/, "");
+  const url = new URL(cleanPath, base);
+  if (url.origin !== base.origin || !url.pathname.startsWith(base.pathname)) {
+    throw new Error(`${provider}: origem ou prefixo externo não permitido`);
+  }
+  return url;
+}
+
+export async function externalRequest(
+  provider: "IMUV" | "DIMEP",
+  path: string,
+  options: { method?: ExternalMethod; body?: unknown } = {},
+): Promise<unknown> {
+  const token = process.env[`${provider}_API_TOKEN`]?.trim();
+  const method = options.method ?? "GET";
+  const url = externalUrl(provider, path);
+  const requestHeaders: Record<string, string> = { Accept: "application/json" };
+  if (provider === "IMUV" && token) requestHeaders.Authorization = `Bearer ${token}`;
+  if (provider === "DIMEP") {
+    const tenant = process.env.DIMEP_TENANT?.trim();
+    if (tenant) requestHeaders.identifier = tenant;
+    if (token) requestHeaders.key = token;
+  }
+  if (options.body !== undefined) requestHeaders["Content-Type"] = "application/json";
 
   const response = await fetch(url, {
-    method: "GET",
+    method,
     cache: "no-store",
     redirect: "error",
     signal: AbortSignal.timeout(integrationTimeout(provider)),
-    headers: {
-      Accept: "application/json",
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-    },
+    headers: requestHeaders,
+    body: options.body === undefined ? undefined : JSON.stringify(options.body),
   });
-  if (!response.ok) throw new Error(`${provider}: resposta HTTP ${response.status}`);
-  return response.json();
+  const responseText = await response.text();
+  if (!response.ok) {
+    const detail = responseText.replace(/\s+/g, " ").slice(0, 300);
+    throw new Error(`${provider}: resposta HTTP ${response.status}${detail ? ` — ${detail}` : ""}`);
+  }
+  if (!responseText) return null;
+  if (!(response.headers.get("content-type") ?? "").includes("json")) {
+    throw new Error(`${provider}: resposta não JSON recebida`);
+  }
+  return JSON.parse(responseText) as unknown;
+}
+
+export function externalGet(provider: "IMUV" | "DIMEP", path: string) {
+  return externalRequest(provider, path);
 }

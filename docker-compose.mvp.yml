@@ -168,6 +168,5 @@ networks:
     internal: true
 
   rdo_edge:
-
   rvproxy_npm_backend_network:
     external: true
