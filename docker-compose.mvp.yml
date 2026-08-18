@@ -127,6 +127,9 @@ services:
     networks:
       - rdo_internal
       - rdo_edge
+    rvproxy_npm_backend_network:
+      aliases:
+        - rdo_interproject_web
     security_opt: [no-new-privileges:true]
     read_only: true
     tmpfs:
@@ -162,3 +165,5 @@ networks:
   rdo_internal:
     internal: true
   rdo_edge:
+  rvproxy_npm_backend_network:
+    external: true
