@@ -240,6 +240,10 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .imuv-sync-panel { display: grid; grid-template-columns: minmax(0,1fr) auto; align-items: center; gap: 24px; margin-top: 24px; }
 .imuv-sync-panel h2 { margin: 5px 0 8px; }
 .imuv-sync-panel p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.55; }
+.dimep-sync-actions { display: grid; grid-template-columns: repeat(2,minmax(150px,1fr)); gap: 10px; align-items: end; }
+.dimep-sync-actions label { display: grid; gap: 4px; color: var(--muted); font-size: 11px; }
+.dimep-sync-actions .button { min-height: 42px; }
+.sync-diff-item small { display: block; margin-top: 4px; color: var(--muted); }
 .sync-buttons { display: flex; flex-wrap: wrap; gap: 10px; }
 .sync-message { grid-column: 1/-1; padding: 11px 14px; border-radius: 10px; color: var(--navy-800) !important; background: var(--blue-100); }
 .modal-backdrop { position: fixed; z-index: 100; inset: 0; display: grid; padding: 24px; place-items: center; background: rgba(9,20,38,.62); }
@@ -468,6 +472,7 @@ textarea.input-field { resize: vertical; line-height: 1.5; }
 
 @media (max-width: 600px) {
   .imuv-sync-panel { grid-template-columns: 1fr; }
+  .dimep-sync-actions { grid-template-columns: 1fr 1fr; }
   .sync-buttons, .sync-buttons .button { width: 100%; }
   .modal-backdrop { padding: 8px; }
   .sync-modal { max-height: 96vh; }

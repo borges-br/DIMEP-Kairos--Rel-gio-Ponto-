@@ -395,12 +395,14 @@ export async function getEmployees(search = "") {
               c.employment_status, (o.collaborator_id is not null) as has_override,
               count(distinct pm.project_id) filter (where pm.active)::text as project_count,
               count(distinct a.id) filter (where a.allocation_status = 'active')::text as allocation_count,
-              count(distinct d.id) filter (where d.review_status = 'pending')::text as pending_divergence_count
+              (count(distinct d.id) filter (where d.review_status = 'pending')
+                + count(distinct di.id) filter (where di.resolution_status = 'open'))::text as pending_divergence_count
          from rdo.collaborators c
          left join rdo.collaborator_profile_overrides o on o.collaborator_id = c.id
          left join rdo.project_members pm on pm.collaborator_id = c.id
          left join rdo.work_allocations a on a.collaborator_id = c.id
          left join rdo.time_divergences d on d.allocation_id = a.id
+         left join rdo.dimep_sync_issues di on di.collaborator_id = c.id
         where c.organization_id = $1 and c.active
           and ($2 = '' or coalesce(o.full_name_override, c.full_name) ilike '%' || $2 || '%'
             or coalesce(o.employee_number_override, c.employee_number, '') ilike '%' || $2 || '%'
@@ -442,7 +444,7 @@ export async function getEmployeeDetail(collaboratorId: string) {
     );
     if (!profile.rows[0]) return null;
 
-    const [projects, workHistory, occurrences, quality] = await Promise.all([
+    const [projects, workHistory, occurrences, quality, dimepIssues] = await Promise.all([
       client.query<{ id: string; code: string; name: string; status: string; source: string }>(
         `select p.id, p.code, p.name, p.status_normalized as status, pm.source
            from rdo.project_members pm join rdo.projects p on p.id = pm.project_id
@@ -494,7 +496,13 @@ export async function getEmployeeDetail(collaboratorId: string) {
           order by r.work_date desc limit 30`,
         [session.organizationId, collaboratorId],
       ),
+      client.query<{ id: string; work_date: string | null; issue_type: string; details: Record<string, unknown>; first_seen_at: Date }>(
+        `select id,work_date::text,issue_type,details,first_seen_at from rdo.dimep_sync_issues
+          where organization_id=$1 and collaborator_id=$2 and resolution_status='open'
+          order by work_date desc nulls last,first_seen_at desc limit 30`,
+        [session.organizationId, collaboratorId],
+      ),
     ]);
-    return { session, employee: profile.rows[0], projects: projects.rows, workHistory: workHistory.rows, occurrences: occurrences.rows, quality: quality.rows };
+    return { session, employee: profile.rows[0], projects: projects.rows, workHistory: workHistory.rows, occurrences: occurrences.rows, quality: quality.rows, dimepIssues: dimepIssues.rows };
   });
 }

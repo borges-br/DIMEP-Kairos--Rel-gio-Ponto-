@@ -41,7 +41,7 @@ export function getSafeIntegrationConfiguration() {
 
   return {
     imuv: status("imuv", ["IMUV_API_BASE_URL", "IMUV_API_TOKEN", "IMUV_TENANT"]),
-    dimep: status("dimep", ["DIMEP_API_BASE_URL", "DIMEP_TENANT", "DIMEP_MARKS_PATH"]),
+    dimep: status("dimep", ["DIMEP_API_BASE_URL", "DIMEP_API_TOKEN", "DIMEP_TENANT", "DIMEP_MARKS_PATH", "DIMEP_EMPLOYEES_PATH"]),
     storage,
   };
 }

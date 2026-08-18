@@ -27,6 +27,30 @@ services:
     networks: [rdo_internal]
     security_opt: [no-new-privileges:true]
 
+  migrate:
+    image: postgres:16-alpine
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./database/003_field_diary_extensions.sql:/migrations/003_field_diary_extensions.sql:ro
+      - ./database/004_collaborator_profile_overrides.sql:/migrations/004_collaborator_profile_overrides.sql:ro
+      - ./database/005_dimep_sync_issues.sql:/migrations/005_dimep_sync_issues.sql:ro
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - >-
+        psql -v ON_ERROR_STOP=1 -h postgres -U "$${POSTGRES_USER:-rdo_admin}" -d "$${POSTGRES_DB:-rdo}"
+        -f /migrations/003_field_diary_extensions.sql
+        -f /migrations/004_collaborator_profile_overrides.sql
+        -f /migrations/005_dimep_sync_issues.sql
+    environment:
+      PGPASSWORD: ${POSTGRES_PASSWORD:?defina POSTGRES_PASSWORD}
+      POSTGRES_USER: ${POSTGRES_USER:-rdo_admin}
+      POSTGRES_DB: ${POSTGRES_DB:-rdo}
+    networks: [rdo_internal]
+    security_opt: [no-new-privileges:true]
+
   minio:
     image: minio/minio:latest
     restart: unless-stopped
@@ -78,6 +102,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
       minio:
         condition: service_healthy
       minio-init:
@@ -112,8 +138,9 @@ services:
       DIMEP_API_USERNAME: ${DIMEP_API_USERNAME:-}
       DIMEP_API_PASSWORD: ${DIMEP_API_PASSWORD:-}
       DIMEP_TENANT: ${DIMEP_TENANT:-}
-      DIMEP_MARKS_PATH: ${DIMEP_MARKS_PATH:-}
-      DIMEP_EMPLOYEES_PATH: ${DIMEP_EMPLOYEES_PATH:-}
+      DIMEP_MARKS_PATH: ${DIMEP_MARKS_PATH:-RestServiceApi/Appointment/GetAppointmentsPointer}
+      DIMEP_EMPLOYEES_PATH: ${DIMEP_EMPLOYEES_PATH:-RestServiceApi/People/SearchPeople}
+      DIMEP_POINTER_ACK_PATH: ${DIMEP_POINTER_ACK_PATH:-RestServiceApi/Appointment/SetAppointmentsPointer}
       DIMEP_TIMEOUT_MS: ${DIMEP_TIMEOUT_MS:-15000}
       OBJECT_STORAGE_PROVIDER: ${OBJECT_STORAGE_PROVIDER:-minio}
       OBJECT_STORAGE_ENDPOINT: ${OBJECT_STORAGE_ENDPOINT:-http://minio:9000}

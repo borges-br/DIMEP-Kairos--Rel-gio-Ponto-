@@ -54,12 +54,14 @@ export function NewRdoForm({
   equipment,
   initialProjectId,
   initialTaskId,
+  globalProjectAccess,
 }: {
   projects: RdoFormProject[];
   materials: RdoCatalogOption[];
   equipment: RdoCatalogOption[];
   initialProjectId?: string;
   initialTaskId?: string;
+  globalProjectAccess?: boolean;
 }) {
   const [state, action] = useActionState(createRdoAction, undefined);
   const [projectId, setProjectId] = useState(initialProjectId ?? projects[0]?.id ?? "");
@@ -144,7 +146,7 @@ export function NewRdoForm({
           <label className="field-group"><span>Projeto <b>*</b></span><select className="input-field" name="projectId" value={projectId} onChange={(event) => changeProject(event.target.value)} required><option value="">Selecione…</option>{projects.map((item) => <option key={item.id} value={item.id}>{item.code} · {item.name}</option>)}</select></label>
           <label className="field-group"><span>Data de trabalho <b>*</b></span><input className="input-field" name="workDate" type="date" defaultValue={today} required /></label>
         </div>
-        {!projects.length && <p className="inline-warning"><WarningIcon />Nenhum projeto ativo está vinculado ao seu usuário. Sincronize o IMUV ou revise a equipe.</p>}
+        {!projects.length && <p className="inline-warning"><WarningIcon />{globalProjectAccess ? "Nenhum projeto ativo foi importado do IMUV. Execute novamente a sincronização e confira os registros rejeitados." : "Nenhum projeto ativo está vinculado ao seu usuário. Solicite ao administrador a vinculação da equipe."}</p>}
       </section>
 
       <section className="form-section">
