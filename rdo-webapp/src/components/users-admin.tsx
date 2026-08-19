@@ -3,7 +3,7 @@
 import { useActionState, useState } from "react";
 import { useFormStatus } from "react-dom";
 import { createUserAction, savePagePermissionsAction, updateUserAction, type UsersState } from "@/app/actions/users";
-import { PlusIcon, ShieldIcon, UsersIcon } from "@/components/icons";
+import { PlusIcon } from "@/components/icons";
 import type { OrganizationUser } from "@/lib/dal";
 import type { AccessLevel, PageKey } from "@/lib/permissions";
 import { roleLabel } from "@/lib/format";
@@ -88,7 +88,7 @@ export function UsersAdmin({ users, permissions, collaborators, currentUserId }:
   return <>
     <section className="panel">
       <div className="resource-heading">
-        <div><h2><UsersIcon /> Usuários do sistema</h2><p>Contas de acesso ao RDO, independentes do cadastro de colaboradores sincronizado.</p></div>
+        <div><h2>Usuários do sistema</h2><p>Contas de acesso ao RDO, independentes do cadastro de colaboradores sincronizado.</p></div>
         <button type="button" className="button button-secondary" onClick={() => setCreating((value) => !value)}>
           <PlusIcon />{creating ? "Cancelar" : "Novo usuário"}
         </button>
@@ -112,7 +112,7 @@ export function UsersAdmin({ users, permissions, collaborators, currentUserId }:
     </section>
 
     <section className="panel">
-      <div className="resource-heading"><div><h2><ShieldIcon /> Permissões por página</h2><p>Cada perfil recebe acesso individual: sem acesso, somente leitura ou leitura e escrita. O administrador mantém escrita em tudo.</p></div></div>
+      <div className="resource-heading"><div><h2>Permissões por página</h2><p>Cada perfil recebe acesso individual: sem acesso, somente leitura ou leitura e escrita. O administrador mantém escrita em tudo.</p></div></div>
       <form action={permissionAction}>
         <div className="table-shell"><table className="data-table permission-table">
           <thead><tr><th>Página</th>{editableRoles.map((role) => <th key={role}>{roleLabel(role)}</th>)}</tr></thead>

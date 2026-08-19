@@ -31,7 +31,7 @@ export default async function DashboardPage() {
   ];
 
   return <div className="page-container">
-    <header className="page-header dashboard-header"><div><span className="eyebrow">GLB TECH · OPERAÇÃO PILOTO</span><h1>Bom trabalho, {firstName}.</h1><p>Acompanhe o dia de campo e registre as atividades da equipe.</p></div>{access.rdos === "write" && <Link href="/rdos/new" className="button button-primary"><PlusIcon />Novo RDO</Link>}</header>
+    <header className="page-header dashboard-header"><div><h1>Olá, {firstName}.</h1><p>Acompanhe o dia de campo e registre as atividades da equipe.</p></div>{access.rdos === "write" && <Link href="/rdos/new" className="button button-primary"><PlusIcon />Novo RDO</Link>}</header>
 
     <section className="metric-grid" aria-label="Resumo operacional">{metrics.map(({ label, value, hint, icon: Icon, tone, href }) =>
       <Link className="metric-card" key={label} href={href}>
