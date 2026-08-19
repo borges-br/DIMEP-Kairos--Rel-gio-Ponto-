@@ -32,7 +32,17 @@ As credenciais IMUV e DIMEP devem ser Docker Secrets ou variáveis protegidas. G
 
 ## Mídia de rascunho sem vínculo
 
-`POST /api/media/staging` grava a evidência em `media_files` antes de o RDO existir; o vínculo em `evidence_links` só é criado quando o rascunho é salvo. Um formulário abandonado deixa a mídia órfã. Uma rotina periódica deve remover o objeto do storage e a linha correspondente:
+`POST /api/media/staging` grava a evidência em `media_files` antes de o RDO existir; o vínculo em `evidence_links` só é criado quando o rascunho é salvo. Um formulário abandonado deixa a mídia órfã.
+
+A limpeza é feita por `rdo-webapp/scripts/cleanup-orphan-media.mjs`, publicado no stack como um serviço sob demanda:
+
+```bash
+docker compose -f docker-compose.mvp.yml --profile maintenance run --rm media-cleanup
+```
+
+Ele apaga somente mídia sem `evidence_links` e sem transcrição, com mais de `MEDIA_ORPHAN_MAX_AGE_HOURS` (padrão 48). Use `DRY_RUN=1` para conferir antes. Agende-o uma vez por dia.
+
+Para inspecionar manualmente o que está pendente:
 
 ```sql
 SELECT m.id, m.object_key
@@ -41,7 +51,7 @@ SELECT m.id, m.object_key
    AND m.created_at < now() - interval '2 days';
 ```
 
-Apague primeiro o objeto no storage e só então a linha, para nunca deixar um registro apontando para um arquivo inexistente.
+A ordem importa: o objeto sai do storage antes da linha, para nunca restar um registro apontando para um arquivo inexistente.
 
 ## Primeiro cadastro
 

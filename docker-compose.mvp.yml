@@ -195,6 +195,29 @@ services:
     tmpfs:
       - /tmp:size=32m,noexec,nosuid
 
+  # Evidencia enviada antes de o rascunho ser salvo fica sem vinculo se o
+  # formulario for abandonado. Rode periodicamente:
+  # docker compose --profile maintenance run --rm media-cleanup
+  media-cleanup:
+    image: rdo-interproject-web:${DEPLOYMENT_VERSION:-latest}
+    profiles: [maintenance]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    environment:
+      <<: *web_environment
+      MEDIA_ORPHAN_MAX_AGE_HOURS: ${MEDIA_ORPHAN_MAX_AGE_HOURS:-48}
+      MEDIA_ORPHAN_BATCH: ${MEDIA_ORPHAN_BATCH:-200}
+      DRY_RUN: ${DRY_RUN:-}
+    command: ["node", "scripts/cleanup-orphan-media.mjs"]
+    networks: [rdo_internal]
+    security_opt: [no-new-privileges:true]
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,noexec,nosuid
+
 volumes:
   rdo_postgres_data:
   rdo_minio_data:
