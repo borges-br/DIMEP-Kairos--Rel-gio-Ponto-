@@ -14,7 +14,6 @@ const optionalOverride = (max: number) => z.preprocess(
 const correctionSchema = z.object({
   collaboratorId: z.string().uuid(),
   fullName: optionalOverride(200),
-  employeeNumber: optionalOverride(100),
   jobTitle: optionalOverride(150),
   department: optionalOverride(150),
   email: z.preprocess((value) => typeof value === "string" && value.trim() ? value.trim() : null, z.string().email().max(320).nullable()),
@@ -29,7 +28,6 @@ export async function saveEmployeeCorrectionAction(formData: FormData) {
   const parsed = correctionSchema.safeParse({
     collaboratorId: formData.get("collaboratorId"),
     fullName: formData.get("fullName"),
-    employeeNumber: formData.get("employeeNumber"),
     jobTitle: formData.get("jobTitle"),
     department: formData.get("department"),
     email: formData.get("email"),
@@ -40,7 +38,7 @@ export async function saveEmployeeCorrectionAction(formData: FormData) {
   });
   if (!parsed.success) redirect(`/employees/${String(formData.get("collaboratorId") || "")}?correction=invalid`);
   const input = parsed.data;
-  if (!input.removeOverride && ![input.fullName, input.employeeNumber, input.jobTitle, input.department, input.email, input.phone].some(Boolean) && input.activeOverride === null) {
+  if (!input.removeOverride && ![input.fullName, input.jobTitle, input.department, input.email, input.phone].some(Boolean) && input.activeOverride === null) {
     redirect(`/employees/${input.collaboratorId}?correction=empty`);
   }
 
@@ -76,7 +74,7 @@ export async function saveEmployeeCorrectionAction(formData: FormData) {
            active_override = excluded.active_override,
            reason = excluded.reason,
            updated_by_user_id = excluded.updated_by_user_id`,
-        [session.organizationId, input.collaboratorId, input.fullName, input.employeeNumber,
+        [session.organizationId, input.collaboratorId, input.fullName, null,
           input.jobTitle, input.department, input.email, input.phone, input.activeOverride, input.reason, session.userId],
       );
     }
@@ -87,7 +85,7 @@ export async function saveEmployeeCorrectionAction(formData: FormData) {
       [session.organizationId, session.userId, input.collaboratorId,
         input.removeOverride ? "delete" : previous.rows[0] ? "update" : "insert",
         previous.rows[0]?.value ? JSON.stringify(previous.rows[0].value) : null,
-        input.removeOverride ? null : JSON.stringify({ fullName: input.fullName, employeeNumber: input.employeeNumber, jobTitle: input.jobTitle, department: input.department, email: input.email, phone: input.phone, active: input.activeOverride }),
+        input.removeOverride ? null : JSON.stringify({ fullName: input.fullName, jobTitle: input.jobTitle, department: input.department, email: input.email, phone: input.phone, active: input.activeOverride }),
         input.reason],
     );
     return true;

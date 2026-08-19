@@ -13,18 +13,61 @@ export async function getDashboardData() {
   const session = await requireSession();
   return withTenant(session.organizationId, async (client) => {
     const overview = await client.query<{
-      active_projects: string;
-      open_rdos: string;
-      pending_approvals: string;
-      open_exceptions: string;
+      active_projects: string; finished_projects: string; collaborators: string; team_members: string;
+      open_rdos: string; pending_approvals: string; approved_rdos: string;
+      open_exceptions: string; hour_divergences: string; dimep_issues: string;
+      punch_minutes_month: string; allocated_minutes_month: string;
+      rdos_month: string; covered_days: string; awaiting_days: string;
     }>(
       `select
         (select count(*) from rdo.projects where organization_id = $1 and active and status_normalized = 'active')::text as active_projects,
+        (select count(*) from rdo.projects where organization_id = $1 and status_normalized in ('done','closed','finished'))::text as finished_projects,
+        (select count(*) from rdo.collaborators c left join rdo.collaborator_profile_overrides o on o.collaborator_id = c.id
+          where c.organization_id = $1 and coalesce(o.active_override, c.active))::text as collaborators,
+        (select count(distinct pm.collaborator_id) from rdo.project_members pm
+          where pm.organization_id = $1 and pm.active)::text as team_members,
         (select count(*) from rdo.rdos r join rdo.rdo_versions v on v.id = r.current_version_id
           where r.organization_id = $1 and v.status in ('draft','returned'))::text as open_rdos,
         (select count(*) from rdo.rdos r join rdo.rdo_versions v on v.id = r.current_version_id
           where r.organization_id = $1 and v.status = 'submitted')::text as pending_approvals,
-        (select count(*) from rdo.time_exceptions where organization_id = $1 and resolution_status = 'open')::text as open_exceptions`,
+        (select count(*) from rdo.rdos r join rdo.rdo_versions v on v.id = r.current_version_id
+          where r.organization_id = $1 and v.status in ('approved','reviewed'))::text as approved_rdos,
+        (select count(*) from rdo.time_exceptions where organization_id = $1 and resolution_status = 'open')::text as open_exceptions,
+        (select count(*) from rdo.time_divergences d join rdo.work_allocations a on a.id = d.allocation_id
+          where d.organization_id = $1 and d.review_status <> 'accepted' and a.allocation_status = 'active')::text as hour_divergences,
+        (select count(*) from rdo.dimep_sync_issues where organization_id = $1 and resolution_status = 'open')::text as dimep_issues,
+        (select coalesce(round(sum(extract(epoch from (ts.original_end_at - ts.original_start_at)) / 60)), 0)
+           from rdo.time_segments ts where ts.organization_id = $1 and ts.segment_status = 'closed'
+            and ts.work_date >= date_trunc('month', current_date))::text as punch_minutes_month,
+        (select coalesce(round(sum(extract(epoch from (a.declared_end_at - a.declared_start_at)) / 60)), 0)
+           from rdo.work_allocations a join rdo.rdo_versions v on v.id = a.rdo_version_id
+           join rdo.rdos r on r.id = v.rdo_id
+          where a.organization_id = $1 and a.allocation_status = 'active'
+            and r.work_date >= date_trunc('month', current_date))::text as allocated_minutes_month,
+        (select count(*) from rdo.rdos where organization_id = $1
+          and work_date >= date_trunc('month', current_date))::text as rdos_month,
+        (select count(*) from (
+           select ts.work_date, ts.collaborator_id from rdo.time_segments ts
+            where ts.organization_id = $1 and ts.segment_status = 'closed'
+              and ts.work_date >= current_date - 30
+            group by 1, 2
+            having exists (select 1 from rdo.work_allocations a
+                             join rdo.rdo_versions v on v.id = a.rdo_version_id
+                             join rdo.rdos r on r.id = v.rdo_id
+                            where a.collaborator_id = ts.collaborator_id and r.work_date = ts.work_date
+                              and a.allocation_status = 'active')
+         ) coberto)::text as covered_days,
+        (select count(*) from (
+           select ts.work_date, ts.collaborator_id from rdo.time_segments ts
+            where ts.organization_id = $1 and ts.segment_status = 'closed'
+              and ts.work_date >= current_date - 30
+            group by 1, 2
+            having not exists (select 1 from rdo.work_allocations a
+                                 join rdo.rdo_versions v on v.id = a.rdo_version_id
+                                 join rdo.rdos r on r.id = v.rdo_id
+                                where a.collaborator_id = ts.collaborator_id and r.work_date = ts.work_date
+                                  and a.allocation_status = 'active')
+         ) aguardando)::text as awaiting_days`,
       [session.organizationId],
     );
     const recent = await client.query<{
@@ -574,9 +617,16 @@ export async function getWorkDistributionData() {
   return { ...options, assignments: assignments.rows };
 }
 
+/** Mesma normalizacao usada na importacao: sem acento, maiusculo, so alfanumerico. */
+function normalizeSearch(value: string) {
+  return value.normalize("NFD").replace(/[̀-ͯ]/g, "").toUpperCase().replace(/[^A-Z0-9]+/g, " ").trim();
+}
+
 export async function getEmployees(search = "") {
   const session = await requireSession();
   const query = search.trim().slice(0, 100);
+  const digits = query.replace(/\D/g, "");
+  const normalized = normalizeSearch(query);
   return withTenant(session.organizationId, async (client) => {
     const result = await client.query<{
       id: string; name: string; cpf_digits: string | null; employee_number: string | null;
@@ -602,19 +652,31 @@ export async function getEmployees(search = "") {
          left join rdo.time_divergences d on d.allocation_id = a.id
          left join rdo.dimep_sync_issues di on di.collaborator_id = c.id
         where c.organization_id = $1 and coalesce(o.active_override, c.active)
-          and ($2 = '' or coalesce(o.full_name_override, c.full_name) ilike '%' || $2 || '%'
+          and ($2 = ''
+            or coalesce(o.full_name_override, c.full_name) ilike '%' || $2 || '%'
+            or ($4 <> '' and c.normalized_name like '%' || $4 || '%')
             or coalesce(o.employee_number_override, c.employee_number, '') ilike '%' || $2 || '%'
-            or coalesce(c.cpf_digits, '') like '%' || regexp_replace($2, '[^0-9]', '', 'g') || '%')
+            or ($3 <> '' and coalesce(c.cpf_digits, '') like '%' || $3 || '%'))
         group by c.id, o.collaborator_id, o.full_name_override, o.employee_number_override,
                  o.job_title_override, o.department_override, o.active_override
         order by coalesce(o.full_name_override, c.full_name) limit 200`,
-      [session.organizationId, query],
+      [session.organizationId, query, digits, normalized],
     );
     return { session, employees: result.rows, search: query };
   });
 }
 
-export async function getEmployeeDetail(collaboratorId: string) {
+export type PunchPeriod = { from: string; to: string };
+
+/** Periodo padrao do historico de batidas quando a tela nao pede outro. */
+export function defaultPunchPeriod(): PunchPeriod {
+  const today = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Sao_Paulo" }).format(new Date());
+  const start = new Date(`${today}T12:00:00Z`);
+  start.setUTCDate(start.getUTCDate() - 29);
+  return { from: start.toISOString().slice(0, 10), to: today };
+}
+
+export async function getEmployeeDetail(collaboratorId: string, period = defaultPunchPeriod()) {
   const session = await requireSession();
   if (!/^[0-9a-f-]{36}$/i.test(collaboratorId)) return null;
   return withTenant(session.organizationId, async (client) => {
@@ -683,14 +745,15 @@ export async function getEmployeeDetail(collaboratorId: string) {
       // Jornada como o relogio de ponto entregou, com a cobertura por RDO do mesmo dia.
       client.query<{
         work_date: string; interval_label: string; total_minutes: number;
-        segment_count: string; allocated_minutes: number | null; open_issues: string;
+        segment_count: string; open_segments: string; allocated_minutes: number | null; open_issues: string;
       }>(
         `select ts.work_date::text,
                 string_agg(to_char(ts.original_start_at at time zone o.timezone, 'HH24:MI') || '–'
-                  || to_char(ts.original_end_at at time zone o.timezone, 'HH24:MI'),
+                  || coalesce(to_char(ts.original_end_at at time zone o.timezone, 'HH24:MI'), '?'),
                   ', ' order by ts.original_start_at) as interval_label,
-                round(sum(extract(epoch from (ts.original_end_at - ts.original_start_at)) / 60))::int as total_minutes,
+                coalesce(round(sum(extract(epoch from (ts.original_end_at - ts.original_start_at)) / 60)), 0)::int as total_minutes,
                 count(*)::text as segment_count,
+                count(*) filter (where ts.segment_status <> 'closed')::text as open_segments,
                 (select round(sum(extract(epoch from (a.declared_end_at - a.declared_start_at)) / 60))::int
                    from rdo.work_allocations a
                    join rdo.rdo_versions v on v.id = a.rdo_version_id
@@ -703,12 +766,11 @@ export async function getEmployeeDetail(collaboratorId: string) {
            from rdo.time_segments ts
            join rdo.organizations o on o.id = ts.organization_id
           where ts.organization_id = $1 and ts.collaborator_id = $2
-            and ts.segment_status = 'closed'
-            and ts.work_date >= current_date - 45
+            and ts.work_date between $3::date and $4::date
           group by ts.work_date
           order by ts.work_date desc
-          limit 45`,
-        [session.organizationId, collaboratorId],
+          limit 400`,
+        [session.organizationId, collaboratorId, period.from, period.to],
       ),
       client.query<{ id: string; rdo_id: string; work_date: string; project_name: string; severity: string; description: string; status: string }>(
         `select oc.id, r.id as rdo_id, r.work_date::text, p.name as project_name,
@@ -755,6 +817,113 @@ export async function getEmployeeDetail(collaboratorId: string) {
       session, employee: profile.rows[0], account: account.rows[0] ?? null,
       projects: projects.rows, workHistory: workHistory.rows, punches: punches.rows,
       occurrences: occurrences.rows, quality: quality.rows, dimepIssues: dimepIssues.rows, divergences,
+      period,
     };
+  });
+}
+
+export type DuplicateCandidate = {
+  reason: "employee_number" | "cpf" | "name";
+  primary_id: string; primary_name: string; primary_number: string | null; primary_cpf: string | null;
+  primary_allocations: string; primary_created: Date;
+  duplicate_id: string; duplicate_name: string; duplicate_number: string | null; duplicate_cpf: string | null;
+  duplicate_allocations: string; duplicate_created: Date;
+};
+
+/**
+ * Pares suspeitos de serem a mesma pessoa. A matricula e o CPF sao os sinais
+ * fortes; nome normalizado identico entra como sinal fraco. Pares ja julgados
+ * pelo administrador nao voltam a aparecer.
+ */
+export async function getDuplicateCandidates() {
+  const session = await requireSession();
+  return withTenant(session.organizationId, async (client) => {
+    const result = await client.query<DuplicateCandidate>(
+      `with ativos as (
+         select c.id, coalesce(o.full_name_override, c.full_name) as name, c.normalized_name,
+                coalesce(o.employee_number_override, c.employee_number) as employee_number,
+                c.cpf_digits, c.created_at,
+                (select count(*) from rdo.work_allocations a
+                  where a.collaborator_id = c.id and a.allocation_status = 'active')::text as allocations
+           from rdo.collaborators c
+           left join rdo.collaborator_profile_overrides o on o.collaborator_id = c.id
+          where c.organization_id = $1 and coalesce(o.active_override, c.active)
+       ), pares as (
+         select 'employee_number'::text as reason, a.id as a_id, b.id as b_id
+           from ativos a join ativos b
+             on b.employee_number = a.employee_number and a.id < b.id
+          where nullif(btrim(a.employee_number), '') is not null
+         union
+         select 'cpf', a.id, b.id
+           from ativos a join ativos b on b.cpf_digits = a.cpf_digits and a.id < b.id
+          where a.cpf_digits is not null
+         union
+         select 'name', a.id, b.id
+           from ativos a join ativos b on b.normalized_name = a.normalized_name and a.id < b.id
+       )
+       select pares.reason,
+              a.id as primary_id, a.name as primary_name, a.employee_number as primary_number,
+              a.cpf_digits as primary_cpf, a.allocations as primary_allocations, a.created_at as primary_created,
+              b.id as duplicate_id, b.name as duplicate_name, b.employee_number as duplicate_number,
+              b.cpf_digits as duplicate_cpf, b.allocations as duplicate_allocations, b.created_at as duplicate_created
+         from pares
+         join ativos a on a.id = pares.a_id
+         join ativos b on b.id = pares.b_id
+        where not exists (
+          select 1 from rdo.collaborator_duplicate_reviews r
+           where r.organization_id = $1
+             and ((r.collaborator_id = pares.a_id and r.duplicate_of_id = pares.b_id)
+               or (r.collaborator_id = pares.b_id and r.duplicate_of_id = pares.a_id))
+        )
+        order by a.name
+        limit 100`,
+      [session.organizationId],
+    );
+    return { session, candidates: result.rows };
+  });
+}
+
+export type OrganizationUser = {
+  user_id: string; display_name: string; email: string; phone_e164: string | null;
+  active: boolean; roles: string[]; collaborator_id: string | null; collaborator_name: string | null;
+  last_session_at: Date | null;
+};
+
+export async function getUsersAdminData() {
+  const session = await requireSession();
+  return withTenant(session.organizationId, async (client) => {
+    const [users, permissions, collaborators] = await Promise.all([
+      client.query<OrganizationUser>(
+        `select u.id as user_id, u.display_name, u.email::text, u.phone_e164, u.active,
+                coalesce(array_agg(distinct ur.role) filter (where ur.active), '{}') as roles,
+                ou.collaborator_id, c.full_name as collaborator_name,
+                (select max(s.created_at) from rdo.user_sessions s
+                  where s.organization_id = ou.organization_id and s.user_id = u.id) as last_session_at
+           from rdo.organization_users ou
+           join rdo.app_users u on u.id = ou.user_id
+           left join rdo.collaborators c on c.id = ou.collaborator_id
+           left join rdo.organization_user_roles ur
+             on ur.organization_id = ou.organization_id and ur.user_id = ou.user_id
+          where ou.organization_id = $1
+          group by u.id, u.display_name, u.email, u.phone_e164, u.active, ou.collaborator_id, c.full_name, ou.organization_id
+          order by u.display_name`,
+        [session.organizationId],
+      ),
+      client.query<{ role: string; page_key: string; access: string }>(
+        "select role, page_key, access from rdo.page_permissions where organization_id = $1",
+        [session.organizationId],
+      ),
+      client.query<{ id: string; name: string }>(
+        `select c.id, coalesce(o.full_name_override, c.full_name) as name
+           from rdo.collaborators c
+           left join rdo.collaborator_profile_overrides o on o.collaborator_id = c.id
+          where c.organization_id = $1 and coalesce(o.active_override, c.active)
+            and not exists (select 1 from rdo.organization_users ou
+                             where ou.organization_id = $1 and ou.collaborator_id = c.id)
+          order by 2 limit 500`,
+        [session.organizationId],
+      ),
+    ]);
+    return { session, users: users.rows, permissions: permissions.rows, collaborators: collaborators.rows };
   });
 }
