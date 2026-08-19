@@ -22,6 +22,7 @@ services:
       - ./007_work_assignments.sql:/docker-entrypoint-initdb.d/007_work_assignments.sql:ro
       - ./008_sanitize_collaborator_labels.sql:/docker-entrypoint-initdb.d/008_sanitize_collaborator_labels.sql:ro
       - ./009_sync_schedules.sql:/docker-entrypoint-initdb.d/009_sync_schedules.sql:ro
+      - ./010_rbac_and_duplicates.sql:/docker-entrypoint-initdb.d/010_rbac_and_duplicates.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 10s

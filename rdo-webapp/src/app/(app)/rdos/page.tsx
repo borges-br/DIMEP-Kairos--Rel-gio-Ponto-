@@ -6,10 +6,12 @@ import { ArrowIcon, ClipboardIcon, PlusIcon, UsersIcon } from "@/components/icon
 import { StatusBadge } from "@/components/status-badge";
 import { getRdos } from "@/lib/dal";
 import { formatDate } from "@/lib/format";
+import { requirePageAccess } from "@/lib/permissions";
 
 export const metadata: Metadata = { title: "Diários de campo" };
 
 export default async function RdosPage({ searchParams }: { searchParams: Promise<{ created?: string }> }) {
+  await requirePageAccess("rdos");
   const { rdos } = await getRdos();
   const created = (await searchParams).created === "1";
   return <div className="page-container">

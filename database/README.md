@@ -11,6 +11,7 @@
 - `007_work_assignments.sql`: registra a distribuição planejada de tarefas para posterior conciliação com IMUV e DIMEP.
 - `008_sanitize_collaborator_labels.sql`: cria `rdo.display_label()` e limpa cargos/departamentos herdados como `[object Object]`.
 - `009_sync_schedules.sql`: guarda a agenda da sincronização automática de apontamentos (próximo disparo, janela e resultado da última execução).
+- `010_rbac_and_duplicates.sql`: matriz de permissão por página e perfil, e o registro das decisões sobre cadastros duplicados.
 - `DICIONARIO_DADOS_MVP.md`: modelo funcional para revisão do diretor.
 - `docker-compose.database.yml`: stack PostgreSQL para Portainer/Docker.
 - `.env.example`: nomes das variáveis, sem credenciais reais.

@@ -16,21 +16,24 @@ import {
   PanelLeftCloseIcon,
   PanelLeftOpenIcon,
   SettingsIcon,
+  ShieldIcon,
   UsersIcon,
 } from "@/components/icons";
 
 const navigation = [
-  { href: "/", label: "Visão geral", icon: LayoutDashboardIcon },
-  { href: "/projects", label: "Projetos", icon: FolderKanbanIcon },
-  { href: "/employees", label: "Colaboradores", icon: UsersIcon },
-  { href: "/rdos", label: "Diário de campo", icon: ClipboardListIcon },
-  { href: "/distribution", label: "Distribuir trabalho", icon: CalendarRangeIcon },
-  { href: "/hours", label: "Apontamentos", icon: Clock3Icon },
-  { href: "/settings", label: "Configurações", icon: SettingsIcon },
+  { href: "/", label: "Visão geral", icon: LayoutDashboardIcon, page: "dashboard" },
+  { href: "/projects", label: "Projetos", icon: FolderKanbanIcon, page: "projects" },
+  { href: "/employees", label: "Colaboradores", icon: UsersIcon, page: "employees" },
+  { href: "/rdos", label: "Diário de campo", icon: ClipboardListIcon, page: "rdos" },
+  { href: "/distribution", label: "Distribuir trabalho", icon: CalendarRangeIcon, page: "distribution" },
+  { href: "/hours", label: "Apontamentos", icon: Clock3Icon, page: "hours" },
+  { href: "/users", label: "Usuários", icon: ShieldIcon, page: "users" },
+  { href: "/settings", label: "Configurações", icon: SettingsIcon, page: "settings" },
 ];
 
-const primaryNavigation = navigation.slice(0, 6);
-const settingsItem = navigation[6];
+/** Configurações fica no rodapé da barra; as demais entram na navegação principal. */
+const primaryNavigation = navigation.filter((item) => item.page !== "settings");
+const settingsItem = navigation[navigation.length - 1];
 
 const COLLAPSE_KEY = "rdo:sidebar-collapsed";
 const COLLAPSE_EVENT = "rdo:sidebar-collapsed-change";
@@ -73,7 +76,12 @@ function NavLink({ item, collapsed, pathname }: { item: (typeof navigation)[numb
   );
 }
 
-export function AppShell({ children, user }: { children: React.ReactNode; user: { name: string; roles: string[] } }) {
+export function AppShell({ children, user, visiblePages }: {
+  children: React.ReactNode;
+  user: { name: string; roles: string[] };
+  /** Páginas que o perfil enxerga; a barra nunca oferece um caminho bloqueado. */
+  visiblePages: string[];
+}) {
   const pathname = usePathname();
   const collapsed = useSyncExternalStore(subscribeToCollapse, readCollapse, readCollapseOnServer);
   const [animated, setAnimated] = useState(false);
@@ -165,11 +173,13 @@ export function AppShell({ children, user }: { children: React.ReactNode; user: 
         </div>
 
         <nav className="sidebar-nav" aria-label="Navegação principal">
-          {primaryNavigation.map((item) => <NavLink key={item.href} item={item} collapsed={collapsed} pathname={pathname} />)}
+          {primaryNavigation.filter((item) => visiblePages.includes(item.page))
+            .map((item) => <NavLink key={item.href} item={item} collapsed={collapsed} pathname={pathname} />)}
         </nav>
 
         <div className="sidebar-foot">
-          <NavLink item={settingsItem} collapsed={collapsed} pathname={pathname} />
+          {visiblePages.includes("settings")
+            && <NavLink item={settingsItem} collapsed={collapsed} pathname={pathname} />}
           <div className="sidebar-user">
             <span className="avatar" aria-hidden="true">{initials}</span>
             <span className="user-copy">
