@@ -1247,3 +1247,115 @@ input[type="date"].input-field, input[type="time"].input-field { color-scheme: d
   }
   .sk::after { display: none; }
 }
+
+/* ==========================================================================
+   Painel da visão geral
+   ========================================================================== */
+
+.metric-card small { display: block; margin-top: 4px; color: var(--text-3); font-size: 11px; }
+
+.insight-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; }
+.insight-card { display: flex; flex-direction: column; gap: 14px; padding: 18px; }
+.insight-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.insight-head h2 { font-size: 15px; }
+.insight-head span { display: flex; align-items: center; gap: 6px; color: var(--text-3); font-size: 11px; letter-spacing: .06em; text-transform: uppercase; }
+.insight-head svg { width: 14px; height: 14px; }
+.insight-figure { display: flex; flex-direction: column; gap: 2px; }
+.insight-figure strong { font-size: 30px; line-height: 1; font-variant-numeric: tabular-nums; }
+.insight-figure span { color: var(--text-3); font-size: 12px; }
+.insight-bar { overflow: hidden; height: 8px; border-radius: 999px; background: var(--surface-raised); }
+.insight-bar-fill { display: block; height: 100%; border-radius: 999px; background: var(--orange); }
+.insight-legend { display: flex; gap: 22px; margin: 0; }
+.insight-legend div { display: flex; flex-direction: column; gap: 2px; }
+.insight-legend dt { color: var(--text-3); font-size: 11px; }
+.insight-legend dd { margin: 0; font-size: 15px; font-weight: 700; }
+.insight-flow { display: grid; gap: 9px; margin: 0; padding: 0; list-style: none; }
+.insight-flow li { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding-bottom: 9px; border-bottom: 1px solid var(--border); font-size: 13px; }
+.insight-flow li:last-child { padding-bottom: 0; border-bottom: 0; }
+.insight-flow strong { font-size: 17px; font-variant-numeric: tabular-nums; }
+.warning-text { color: var(--warning); }
+
+/* ==========================================================================
+   Saúde das integrações
+   ========================================================================== */
+
+.health-card { display: grid; gap: 16px; padding: 18px; }
+.health-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; }
+.health-head h2 { margin-top: 4px; font-size: 17px; }
+.health-head p { margin-top: 4px; color: var(--text-3); font-size: 12px; }
+.health-list { display: grid; gap: 10px; margin: 0; padding: 0; list-style: none; }
+.health-item { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border: 1px solid var(--border); border-radius: var(--r-md); background: var(--bg-subtle); }
+.health-item > div { display: flex; min-width: 0; flex: 1; flex-direction: column; gap: 2px; }
+.health-item strong { font-size: 13px; }
+.health-item small { overflow: hidden; color: var(--text-3); font-size: 11px; text-overflow: ellipsis; }
+.health-state { flex: none; color: var(--text-3); font-size: 11px; font-variant-numeric: tabular-nums; }
+.health-flash { width: 12px; height: 12px; flex: none; border-radius: 50%; background: var(--text-3); }
+.health-item.online .health-flash { background: var(--success); box-shadow: 0 0 0 4px var(--success-dim); animation: health-pulse 2.4s ease-in-out infinite; }
+.health-item.online .health-state { color: var(--success); }
+.health-item.offline { border-color: rgba(226, 100, 100, .35); background: var(--danger-dim); }
+.health-item.offline .health-flash { background: var(--danger); box-shadow: 0 0 0 4px rgba(226, 100, 100, .2); animation: health-pulse 1.1s ease-in-out infinite; }
+.health-item.offline .health-state { color: var(--danger); }
+.health-item.checking .health-flash { animation: health-pulse 1.4s ease-in-out infinite; }
+
+@keyframes health-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
+@media (prefers-reduced-motion: reduce) { .health-flash { animation: none; } }
+
+/* ==========================================================================
+   Usuários e permissões
+   ========================================================================== */
+
+.user-create { display: grid; gap: 16px; margin: 16px 0; padding: 16px; border: 1px solid var(--border-strong); border-radius: var(--r-md); background: var(--bg-subtle); }
+.user-list { display: grid; gap: 10px; margin-top: 16px; }
+.user-row { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr) auto auto; gap: 14px; align-items: center; padding: 13px 14px; border: 1px solid var(--border); border-radius: var(--r-md); }
+.user-row.inactive { opacity: .6; }
+.user-identity { display: flex; min-width: 0; align-items: center; gap: 11px; }
+.user-initials { display: flex; width: 36px; height: 36px; flex: none; align-items: center; justify-content: center; border-radius: 50%; background: var(--surface-raised); font-size: 12px; font-weight: 800; }
+.user-identity > div { display: flex; min-width: 0; flex-direction: column; }
+.user-identity strong { font-size: 13px; }
+.user-identity em { color: var(--orange-hi); font-style: normal; }
+.user-identity small { overflow: hidden; color: var(--text-3); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.user-roles { display: flex; flex-wrap: wrap; gap: 5px; }
+.user-edit { display: grid; gap: 14px; grid-column: 1 / -1; padding-top: 14px; border-top: 1px solid var(--border); }
+.role-checks { display: flex; flex-wrap: wrap; gap: 8px; }
+.check-chip { display: flex; align-items: center; gap: 7px; padding: 7px 12px; border: 1px solid var(--border-strong); border-radius: 999px; font-size: 12px; cursor: pointer; }
+.check-chip:has(input:checked) { color: var(--orange-hi); border-color: var(--border-focus); background: var(--orange-dim); }
+.permission-table select { min-width: 150px; }
+
+@media (max-width: 860px) {
+  .user-row { grid-template-columns: 1fr; }
+}
+
+/* ==========================================================================
+   Duplicidade de cadastro
+   ========================================================================== */
+
+.duplicate-panel { display: grid; gap: 12px; }
+.duplicate-alert { display: flex; width: 100%; align-items: center; gap: 12px; padding: 14px 16px; border: 1px solid rgba(229, 166, 59, .35); border-radius: var(--r-md); color: inherit; background: var(--warning-dim); text-align: left; cursor: pointer; }
+.duplicate-alert svg { width: 20px; height: 20px; flex: none; color: var(--warning); }
+.duplicate-alert > span { display: flex; min-width: 0; flex: 1; flex-direction: column; gap: 3px; }
+.duplicate-alert strong { font-size: 13px; }
+.duplicate-alert small { color: var(--text-2); font-size: 12px; }
+.duplicate-alert em { flex: none; color: var(--orange-hi); font-size: 12px; font-style: normal; font-weight: 700; }
+.duplicate-list { display: grid; gap: 12px; }
+.duplicate-card { display: grid; gap: 14px; padding: 16px; border: 1px solid var(--border-strong); border-radius: var(--r-md); background: var(--surface); }
+.duplicate-card form { display: grid; gap: 14px; }
+.duplicate-card.resolved { display: flex; align-items: center; gap: 10px; color: var(--success); }
+.duplicate-card.resolved svg { width: 18px; height: 18px; }
+.duplicate-sides { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
+.duplicate-side { display: flex; align-items: flex-start; gap: 10px; padding: 13px; border: 1px solid var(--border); border-radius: var(--r-md); background: var(--bg-subtle); cursor: pointer; }
+.duplicate-side.keep { border-color: var(--border-focus); background: var(--orange-dim); }
+.duplicate-side > span { display: flex; min-width: 0; flex: 1; flex-direction: column; gap: 3px; }
+.duplicate-side strong { font-size: 13px; }
+.duplicate-side small { color: var(--text-3); font-size: 11px; }
+.duplicate-side em { flex: none; color: var(--text-3); font-size: 10px; font-style: normal; letter-spacing: .06em; text-transform: uppercase; }
+.duplicate-side.keep em { color: var(--orange-hi); }
+
+/* ==========================================================================
+   Origem da jornada e filtro de batidas
+   ========================================================================== */
+
+.origin-cell { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }
+.origin-cell small { color: var(--text-3); font-size: 11px; }
+.punch-filter { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px; margin: 14px 0; }
+.punch-filter .field-group { flex: 0 0 auto; }
+.punch-filter .input-field { width: 170px; }
