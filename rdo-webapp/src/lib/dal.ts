@@ -104,14 +104,23 @@ export async function getProjects() {
       task_count: string;
       member_count: string;
     }>(
+      // tasks x project_members eram multiplicadas entre si antes de agregar;
+      // cada contagem agora sai de um lateral proprio.
       `select p.id, p.code, p.name, c.legal_name as client_name,
               p.status_normalized as status,
-              count(distinct t.id) filter (where t.active)::text as task_count,
-              count(distinct pm.collaborator_id) filter (where pm.active)::text as member_count
+              tc.task_count::text as task_count,
+              mc.member_count::text as member_count
          from rdo.projects p
          join rdo.clients c on c.id = p.client_id
-         left join rdo.tasks t on t.project_id = p.id
-         left join rdo.project_members pm on pm.project_id = p.id
+         cross join lateral (
+           select count(*) as task_count from rdo.tasks t
+            where t.project_id = p.id and t.active
+         ) tc
+         cross join lateral (
+           select count(distinct pm.collaborator_id) as member_count
+             from rdo.project_members pm
+            where pm.project_id = p.id and pm.active
+         ) mc
         where p.organization_id = $1 and p.active
           and ($2::boolean or exists (
             select 1 from rdo.leader_team_members ltm
@@ -119,7 +128,6 @@ export async function getProjects() {
                and ltm.valid_from <= current_date
                and (ltm.valid_until is null or ltm.valid_until >= current_date)
           ))
-        group by p.id, p.code, p.name, c.legal_name, p.status_normalized
         order by p.name`,
       [session.organizationId, allProjects, session.userId],
     );
@@ -633,6 +641,10 @@ export async function getEmployees(search = "") {
       job_title: string | null; department: string | null; employment_status: string;
       has_override: boolean; project_count: string; allocation_count: string; pending_divergence_count: string;
     }>(
+      // Cada contagem sai de um lateral independente. Juntar project_members,
+      // work_allocations e dimep_sync_issues no mesmo from multiplicava as linhas
+      // entre si (N x M x K por colaborador) antes de agregar; o count(distinct)
+      // corrigia o numero, mas o custo do produto cartesiano permanecia.
       `select c.id, coalesce(o.full_name_override, c.full_name) as name, c.cpf_digits,
               coalesce(o.employee_number_override, c.employee_number) as employee_number,
               rdo.display_label(coalesce(o.job_title_override, c.job_title)) as job_title,
@@ -641,24 +653,39 @@ export async function getEmployees(search = "") {
                 case when c.employment_status='inactive' and o.active_override is true then 'active' else c.employment_status end
               else 'inactive' end as employment_status,
               (o.collaborator_id is not null) as has_override,
-              count(distinct pm.project_id) filter (where pm.active)::text as project_count,
-              count(distinct a.id) filter (where a.allocation_status = 'active')::text as allocation_count,
-              (count(distinct d.id) filter (where d.review_status = 'pending')
-                + count(distinct di.id) filter (where di.resolution_status = 'open'))::text as pending_divergence_count
+              pc.project_count::text as project_count,
+              ac.allocation_count::text as allocation_count,
+              (ac.pending_divergence_count + ic.open_issue_count)::text as pending_divergence_count
          from rdo.collaborators c
          left join rdo.collaborator_profile_overrides o on o.collaborator_id = c.id
-         left join rdo.project_members pm on pm.collaborator_id = c.id
-         left join rdo.work_allocations a on a.collaborator_id = c.id
-         left join rdo.time_divergences d on d.allocation_id = a.id
-         left join rdo.dimep_sync_issues di on di.collaborator_id = c.id
+         cross join lateral (
+           select count(distinct pm.project_id) as project_count
+             from rdo.project_members pm
+            where pm.organization_id = c.organization_id
+              and pm.collaborator_id = c.id and pm.active
+         ) pc
+         cross join lateral (
+           -- allocation_count so conta apontamentos ativos, mas a contagem de
+           -- divergencias pendentes abrange todos os status, como no original.
+           select count(*) filter (where a.allocation_status = 'active') as allocation_count,
+                  count(*) filter (where d.review_status = 'pending') as pending_divergence_count
+             from rdo.work_allocations a
+             left join rdo.time_divergences d on d.allocation_id = a.id
+            where a.organization_id = c.organization_id
+              and a.collaborator_id = c.id
+         ) ac
+         cross join lateral (
+           select count(*) as open_issue_count
+             from rdo.dimep_sync_issues di
+            where di.organization_id = c.organization_id
+              and di.collaborator_id = c.id and di.resolution_status = 'open'
+         ) ic
         where c.organization_id = $1 and coalesce(o.active_override, c.active)
           and ($2 = ''
             or coalesce(o.full_name_override, c.full_name) ilike '%' || $2 || '%'
             or ($4 <> '' and c.normalized_name like '%' || $4 || '%')
             or coalesce(o.employee_number_override, c.employee_number, '') ilike '%' || $2 || '%'
             or ($3 <> '' and coalesce(c.cpf_digits, '') like '%' || $3 || '%'))
-        group by c.id, o.collaborator_id, o.full_name_override, o.employee_number_override,
-                 o.job_title_override, o.department_override, o.active_override
         order by coalesce(o.full_name_override, c.full_name) limit 200`,
       [session.organizationId, query, digits, normalized],
     );

@@ -14,11 +14,15 @@ function maskCpf(cpf: string | null) {
 }
 
 export default async function EmployeesPage({ searchParams }: { searchParams: Promise<{ q?: string }> }) {
-  await requirePageAccess("employees");
   const { q = "" } = await searchParams;
-  const data = await getEmployees(q);
-  const isAdmin = data.session.roles.includes("admin");
-  const duplicates = isAdmin ? (await getDuplicateCandidates()).candidates : [];
+  // As duas consultas sao independentes: rodar em paralelo evita somar os tempos.
+  const { session } = await requirePageAccess("employees");
+  const isAdmin = session.roles.includes("admin");
+  const [data, duplicateResult] = await Promise.all([
+    getEmployees(q),
+    isAdmin ? getDuplicateCandidates() : null,
+  ]);
+  const duplicates = duplicateResult?.candidates ?? [];
   return <div className="page-container wide-page">
     <Breadcrumbs items={[{ label: "Visão geral", href: "/" }, { label: "Colaboradores" }]} />
     <header className="page-header"><div><span className="eyebrow">DIMEP + IMUV</span><h1>Colaboradores</h1><p>Cadastro sincronizado, colaboração em projetos e exceções de jornada.</p></div></header>
