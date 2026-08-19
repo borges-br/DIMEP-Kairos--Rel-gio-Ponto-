@@ -404,6 +404,8 @@ export async function acknowledgeDimepPunches(ids: string[]) {
 }
 
 export async function recordDimepPointerResult(client: PoolClient, organizationId: string, runId: string, success: boolean, detail: string) {
-  await client.query(`update rdo.sync_runs set status=case when $3 then status else 'partial' end,cursor_value=$4,
-    error_summary=case when $3 then error_summary else concat_ws(' | ',error_summary,$4) end where organization_id=$1 and id=$2`, [organizationId, runId, success, detail]);
+  // O cast em $4 e obrigatorio: concat_ws recebe "any" e o PostgreSQL nao
+  // consegue inferir o tipo do parametro, recusando a instrucao inteira.
+  await client.query(`update rdo.sync_runs set status=case when $3 then status else 'partial' end,cursor_value=$4::text,
+    error_summary=case when $3 then error_summary else concat_ws(' | ',error_summary,$4::text) end where organization_id=$1 and id=$2`, [organizationId, runId, success, detail]);
 }

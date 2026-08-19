@@ -112,9 +112,15 @@ async function importPunches(organizationId: string, lookbackDays: number): Prom
   } catch (error) {
     pointerMessage = error instanceof Error ? error.message : "Falha ao avançar o ponteiro.";
   }
-  await withTenant(organizationId, (client) => recordDimepPointerResult(
-    client, organizationId, applied.runId, !pointerMessage, pointerMessage || "Ponteiro confirmado.",
-  ));
+  // As batidas ja foram gravadas neste ponto. Uma falha ao registrar o resultado
+  // do ponteiro e escrituracao, e nao pode transformar uma importacao boa em erro.
+  try {
+    await withTenant(organizationId, (client) => recordDimepPointerResult(
+      client, organizationId, applied.runId, !pointerMessage, pointerMessage || "Ponteiro confirmado.",
+    ));
+  } catch (error) {
+    pointerMessage = `${pointerMessage} Falha ao registrar o ponteiro: ${error instanceof Error ? error.message : "erro desconhecido"}`.trim();
+  }
 
   const periodo = startDate === endDate ? startDate : `${startDate} a ${endDate}`;
   return {
