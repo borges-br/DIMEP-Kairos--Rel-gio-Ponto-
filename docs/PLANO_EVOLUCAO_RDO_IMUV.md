@@ -61,14 +61,22 @@ A documentação pública analisada não apresenta um endpoint específico de cr
 - **`[object Object]` deixou de depender de saneamento manual.** A migração `008` cria `rdo.display_label()`, usada em todas as consultas de colaborador, e limpa os registros herdados. Cargo e setor ausentes agora aparecem como *“Cargo e setor ainda não sincronizados do IMUV”*, no lugar de “Função não informada · Sem departamento”.
 - **Divergência**: a lista de detalhes passou a respeitar `allocation_status = 'active'`, alinhando o conteúdo do modal ao número mostrado no botão.
 - **Mídia órfã**: rascunho abandonado deixa arquivo sem vínculo. A rotina de limpeza está descrita em `database/README.md`.
+- **Rascunho recuperável**: o preenchimento do RDO fica no navegador do líder e pode ser recuperado após queda de sessão ou aba fechada.
+
+### Ficha do colaborador e sincronização automática
+
+- **Erro ao abrir um colaborador corrigido.** As consultas de ocorrências e qualidade usavam `SELECT DISTINCT` com `ORDER BY r.work_date`, expressão ausente da lista de seleção — o PostgreSQL recusava a consulta e a página inteira falhava. O `DISTINCT` era desnecessário: o `EXISTS` já garante uma linha por registro.
+- **Jornada do relógio de ponto na ficha**: batidas fechadas dos últimos 45 dias, com o total do dia, o tempo já distribuído em RDO e a situação da cobertura.
+- **Divergências acionáveis fora de Apontamentos**: o mesmo cartão de revisão aparece na ficha do colaborador, com aceitar, solicitar correção ou dispensar ocorrência DIMEP.
+- **Sincronização automática de apontamentos** (`009_sync_schedules.sql`): o servidor importa as batidas a cada 60 minutos entre 06:00 e 23:59, e Apontamentos mostra o contador para a próxima execução, o resultado da última e o botão **Sincronizar agora**. A agenda vive no banco, então o contador sobrevive a reinício do container e é o mesmo para todos os usuários; `running_since` impede execução dupla.
 
 ## Próximas etapas recomendadas
 
-1. **Aplicar as migrações e publicar a versão**: executar `007_work_assignments.sql` e `008_sanitize_collaborator_labels.sql`, fazer backup e publicar o webapp.
+1. **Aplicar as migrações e publicar a versão**: executar `007_work_assignments.sql`, `008_sanitize_collaborator_labels.sql` e `009_sync_schedules.sql`, fazer backup e publicar o webapp.
 2. **Ressincronizar cadastros**: atualizar colaboradores para repopular cargo e setor a partir do IMUV já normalizado.
 3. **Homologar o tenant IMUV**: validar expansões, paginação, permissões, formatos de datas, catálogos de profissão/função/departamento e o payload de responsáveis da tarefa.
 4. **Teste de aceitação em campo**: líder cria rascunho com evidência, seleciona equipe, distribui trabalho e trata divergência; encarregado aprova; exportação é conferida no IMUV.
-5. **Automatizar a conciliação DIMEP**: sincronização incremental agendada, alertas para batidas ausentes e fechamento automático quando todas as divergências forem aceitas.
+5. **Ampliar a automação da conciliação**: a sincronização incremental agendada já está no ar; faltam alertas de batida ausente e o fechamento automático quando todas as divergências forem aceitas.
 6. **Expandir dados operacionais IMUV**: checklist, prioridade/prazos, produtos/serviços, estoque e ordens de produção, sempre com prévia e auditoria.
 7. **Preparar OMIE**: definir De-Para de clientes, projetos, serviços/produtos e centros de custo sem duplicar o papel de mestre de cada sistema.
 

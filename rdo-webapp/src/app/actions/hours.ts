@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { requireAnyRole } from "@/lib/auth/session";
 import { withTenant } from "@/lib/db";
+import { runHoursSync } from "@/lib/sync-scheduler";
 
 export type HoursReviewState = { ok?: string; error?: string } | undefined;
 
@@ -111,5 +112,26 @@ export async function reviewHoursDivergenceAction(_state: HoursReviewState, form
   } catch (error) {
     console.error("Falha ao revisar divergência", error);
     return { error: "Não foi possível registrar a revisão." };
+  }
+}
+
+export type HoursSyncState = { ok?: string; error?: string } | undefined;
+
+/**
+ * "Sincronizar agora": importa as batidas do periodo recente e reprograma o
+ * proximo disparo automatico para dali a um intervalo cheio.
+ */
+export async function syncHoursNowAction(): Promise<HoursSyncState> {
+  const session = await requireAnyRole(["foreman", "manager", "director", "admin"]);
+  try {
+    const result = await runHoursSync(session.organizationId, "manual");
+    revalidatePath("/hours");
+    revalidatePath("/employees");
+    if (result.skipped) return { error: result.message };
+    if (result.status === "failed") return { error: result.message };
+    return { ok: result.message };
+  } catch (error) {
+    console.error("Falha ao sincronizar apontamentos", error);
+    return { error: "Não foi possível sincronizar com o DIMEP agora." };
   }
 }

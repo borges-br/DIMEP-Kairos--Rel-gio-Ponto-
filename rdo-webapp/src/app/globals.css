@@ -902,6 +902,30 @@ input[type="date"].input-field, input[type="time"].input-field { color-scheme: d
 .evidence-queue li.ready { border-color: rgba(67, 180, 122, .35); }
 .evidence-queue li.failed { border-color: rgba(226, 100, 100, .35); background: var(--danger-dim); }
 .evidence-queue li > img { width: 64px; height: 64px; flex: none; border-radius: var(--r-sm); object-fit: cover; background: var(--surface-raised); }
+.punch-row { grid-template-columns: 110px minmax(200px, 1fr) 100px 150px minmax(160px, 1fr); }
+
+.sync-timer {
+  display: grid; gap: 16px; align-items: center; padding: 16px 18px;
+  grid-template-columns: minmax(200px, auto) minmax(0, 1fr) auto;
+  border: 1px solid var(--border-strong); border-radius: var(--r-md); background: var(--bg-subtle);
+}
+.sync-timer-clock { display: flex; align-items: center; gap: 12px; }
+.sync-timer-clock svg { width: 26px; height: 26px; flex: none; color: var(--orange-hi); }
+.sync-timer-clock > div { display: flex; min-width: 0; flex-direction: column; }
+.sync-timer-clock strong { font-size: 20px; font-variant-numeric: tabular-nums; letter-spacing: .02em; }
+.sync-timer-clock span { margin-top: 2px; color: var(--text-3); font-size: 12px; }
+.sync-timer-last { display: flex; min-width: 0; flex-direction: column; gap: 3px; }
+.sync-timer-last strong { display: flex; align-items: center; gap: 6px; font-size: 13px; }
+.sync-timer-last strong svg { width: 15px; height: 15px; flex: none; }
+.sync-timer-last span { color: var(--text-3); font-size: 12px; }
+.sync-timer-actions { display: flex; flex: none; justify-content: flex-end; }
+.sync-timer .form-error, .sync-timer .readiness-note { grid-column: 1 / -1; margin: 0; }
+@media (max-width: 900px) {
+  .sync-timer { grid-template-columns: 1fr; }
+  .sync-timer-actions { justify-content: stretch; }
+  .sync-timer-actions .button { width: 100%; }
+}
+
 .evidence-thumb-placeholder {
   display: flex; width: 64px; height: 64px; flex: none; align-items: center; justify-content: center;
   border: 1px dashed var(--border-strong); border-radius: var(--r-sm); color: var(--text-3); background: var(--surface-raised);

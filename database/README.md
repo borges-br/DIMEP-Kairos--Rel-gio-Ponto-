@@ -10,6 +10,7 @@
 - `006_hr_employee_imuv.sql`: adiciona o perfil RH e campos cadastrais auditáveis usados na prévia de envio de funcionários ao IMUV.
 - `007_work_assignments.sql`: registra a distribuição planejada de tarefas para posterior conciliação com IMUV e DIMEP.
 - `008_sanitize_collaborator_labels.sql`: cria `rdo.display_label()` e limpa cargos/departamentos herdados como `[object Object]`.
+- `009_sync_schedules.sql`: guarda a agenda da sincronização automática de apontamentos (próximo disparo, janela e resultado da última execução).
 - `DICIONARIO_DADOS_MVP.md`: modelo funcional para revisão do diretor.
 - `docker-compose.database.yml`: stack PostgreSQL para Portainer/Docker.
 - `.env.example`: nomes das variáveis, sem credenciais reais.
@@ -34,13 +35,27 @@ As credenciais IMUV e DIMEP devem ser Docker Secrets ou variáveis protegidas. G
 
 `POST /api/media/staging` grava a evidência em `media_files` antes de o RDO existir; o vínculo em `evidence_links` só é criado quando o rascunho é salvo. Um formulário abandonado deixa a mídia órfã.
 
-A limpeza é feita por `rdo-webapp/scripts/cleanup-orphan-media.mjs`, publicado no stack como um serviço sob demanda:
+A limpeza é feita por `rdo-webapp/scripts/cleanup-orphan-media.mjs`. Ele apaga somente mídia sem `evidence_links` e sem transcrição, com mais de `MEDIA_ORPHAN_MAX_AGE_HOURS` (padrão 48). Rode uma vez por dia.
+
+**Pelo terminal**, o stack publica um serviço sob demanda:
 
 ```bash
 docker compose -f docker-compose.mvp.yml --profile maintenance run --rm media-cleanup
 ```
 
-Ele apaga somente mídia sem `evidence_links` e sem transcrição, com mais de `MEDIA_ORPHAN_MAX_AGE_HOURS` (padrão 48). Use `DRY_RUN=1` para conferir antes. Agende-o uma vez por dia.
+**Pelo Portainer** (stack vindo do Git, sem acesso ao `docker compose run`), use o console do container do webapp, que já tem todas as variáveis de ambiente:
+
+1. **Containers** → `rdo-interproject-web-1` → ícone **>_ Console** → **Connect** com `/bin/sh`.
+2. Confira antes, sem apagar nada:
+   ```sh
+   DRY_RUN=1 node scripts/cleanup-orphan-media.mjs
+   ```
+3. Execute de verdade:
+   ```sh
+   node scripts/cleanup-orphan-media.mjs
+   ```
+
+Para automatizar no Portainer, crie uma segunda stack de uma linha com a mesma imagem e um agendamento externo, ou use **Edge Jobs** (Portainer Business) apontando para o mesmo comando.
 
 Para inspecionar manualmente o que está pendente:
 
