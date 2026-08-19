@@ -7,7 +7,7 @@ import { ClockIcon, ProjectsIcon, UsersIcon, WarningIcon } from "@/components/ic
 import { getEmployeeDetail } from "@/lib/dal";
 import { formatDate } from "@/lib/format";
 
-export const metadata: Metadata = { title: "Detalhes do funcionário" };
+export const metadata: Metadata = { title: "Detalhes do colaborador" };
 
 function maskCpf(cpf: string | null) {
   return cpf ? `***.***.${cpf.slice(6, 9)}-${cpf.slice(9)}` : "Não vinculado";
@@ -27,7 +27,7 @@ export default async function EmployeeDetailPage({ params, searchParams }: { par
   const canCorrect = detail.session.roles.some((role) => ["hr", "director", "admin"].includes(role));
   const employee = detail.employee;
   return <div className="page-container wide-page">
-    <Breadcrumbs items={[{ label: "Início", href: "/" }, { label: "Funcionários", href: "/employees" }, { label: employee.name }]} />
+    <Breadcrumbs items={[{ label: "Visão geral", href: "/" }, { label: "Colaboradores", href: "/employees" }, { label: employee.name }]} />
     <header className="page-header"><div><span className="eyebrow">COLABORADOR</span><h1>{employee.name}</h1><p>{employee.job_title || "Função não informada"} · {employee.department || "Sem departamento"}</p></div><span className={`status-badge ${employee.employment_status === "active" ? "status-success" : "status-neutral"}`}>{employee.employment_status === "active" ? "Ativo" : employee.employment_status}</span></header>
     {correction === "ok" && <div className="success-banner">Correção local salva com trilha de auditoria.</div>}
     {correction === "invalid" && <div className="form-error">Revise os campos e informe um motivo com pelo menos 10 caracteres.</div>}

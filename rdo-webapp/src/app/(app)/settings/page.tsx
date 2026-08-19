@@ -16,7 +16,7 @@ export default async function SettingsPage() {
   const { session, env, connections } = await getSettingsData();
   const connection = (provider: "imuv" | "dimep") => connections.find((item) => item.provider === provider);
   return <div className="page-container">
-    <Breadcrumbs items={[{ label: "Início", href: "/" }, { label: "Configurações" }]} />
+    <Breadcrumbs items={[{ label: "Visão geral", href: "/" }, { label: "Configurações" }]} />
     <header className="page-header"><div><span className="eyebrow">AMBIENTE E INTEGRAÇÕES</span><h1>Configurações</h1><p>Status seguro do backend. Credenciais nunca são exibidas no navegador.</p></div></header>
     <div className="settings-grid">
       <article className="integration-card"><span className="integration-icon dimep"><DatabaseIcon /></span><div className="integration-title"><div><span>RELÓGIO DE PONTO</span><h2>DIMEP Kairos</h2></div><ConfigStatus configured={env.dimep.configured} /></div><p>Importa colaboradores, batidas imutáveis e segmentos de jornada.</p><dl><div><dt>Variáveis do servidor</dt><dd>{env.dimep.configured ? "Completas" : `${env.dimep.missing.length} pendente(s)`}</dd></div><div><dt>Conexão do tenant</dt><dd>{connection("dimep")?.enabled ? "Ativa" : "Não cadastrada"}</dd></div><div><dt>Última sincronização</dt><dd>{connection("dimep")?.last_status ?? "Ainda não executada"}</dd></div></dl></article>

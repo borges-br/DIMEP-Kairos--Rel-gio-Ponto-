@@ -10,7 +10,7 @@ export default async function NewRdoPage({ searchParams }: { searchParams: Promi
   const query = await searchParams;
   const selectedProject = projects.find((project) => project.id === query.project);
   const selectedTask = selectedProject?.tasks.find((task) => task.id === query.task);
-  const crumbs: { label: string; href?: string }[] = [{ label: "Início", href: "/" }, { label: "Projetos", href: "/projects" }];
+  const crumbs: { label: string; href?: string }[] = [{ label: "Visão geral", href: "/" }, { label: "Projetos", href: "/projects" }];
   if (selectedProject) crumbs.push({ label: `${selectedProject.code} · ${selectedProject.name}`, href: `/projects/${selectedProject.id}` });
   crumbs.push({ label: "Novo RDO" });
   const globalProjectAccess = session.roles.some((role) => ["foreman", "manager", "director", "admin"].includes(role));

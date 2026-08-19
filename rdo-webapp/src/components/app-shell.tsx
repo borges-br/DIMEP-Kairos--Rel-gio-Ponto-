@@ -1,67 +1,201 @@
 "use client";
 
+import Image from "next/image";
+import interprojectLogo from "@/assets/brand/interproject-logo.png";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { logoutAction } from "@/app/actions/auth";
-import { ClipboardIcon, ClockIcon, CloseIcon, HomeIcon, LogoutIcon, MenuIcon, ProjectsIcon, SettingsIcon, UsersIcon } from "@/components/icons";
+import {
+  ClipboardListIcon,
+  Clock3Icon,
+  FolderKanbanIcon,
+  LayoutDashboardIcon,
+  LogoutIcon,
+  PanelLeftCloseIcon,
+  PanelLeftOpenIcon,
+  SettingsIcon,
+  UsersIcon,
+} from "@/components/icons";
 
 const navigation = [
-  { href: "/", label: "Visão geral", shortLabel: "Início", icon: HomeIcon },
-  { href: "/projects", label: "Projetos", shortLabel: "Projetos", icon: ProjectsIcon },
-  { href: "/employees", label: "Funcionários", shortLabel: "Equipe", icon: UsersIcon },
-  { href: "/rdos", label: "Diários de campo", shortLabel: "RDOs", icon: ClipboardIcon },
-  { href: "/hours", label: "Apontamentos", shortLabel: "Horas", icon: ClockIcon },
-  { href: "/settings", label: "Configurações", shortLabel: "Config", icon: SettingsIcon },
+  { href: "/", label: "Visão geral", icon: LayoutDashboardIcon },
+  { href: "/projects", label: "Projetos", icon: FolderKanbanIcon },
+  { href: "/employees", label: "Colaboradores", icon: UsersIcon },
+  { href: "/rdos", label: "Diário de campo", icon: ClipboardListIcon },
+  { href: "/hours", label: "Apontamentos", icon: Clock3Icon },
+  { href: "/settings", label: "Configurações", icon: SettingsIcon },
 ];
+
+const primaryNavigation = navigation.slice(0, 5);
+const settingsItem = navigation[5];
+
+const COLLAPSE_KEY = "rdo:sidebar-collapsed";
+const COLLAPSE_EVENT = "rdo:sidebar-collapsed-change";
+
+/** Preferência de barra recolhida — lida do localStorage sem quebrar a hidratação. */
+function subscribeToCollapse(onChange: () => void) {
+  window.addEventListener("storage", onChange);
+  window.addEventListener(COLLAPSE_EVENT, onChange);
+  return () => {
+    window.removeEventListener("storage", onChange);
+    window.removeEventListener(COLLAPSE_EVENT, onChange);
+  };
+}
+
+function readCollapse() {
+  try {
+    return window.localStorage.getItem(COLLAPSE_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function readCollapseOnServer() {
+  return false;
+}
 
 function isActive(pathname: string, href: string) {
   return href === "/" ? pathname === "/" : pathname.startsWith(href);
 }
 
+function NavLink({ item, collapsed, pathname }: { item: (typeof navigation)[number]; collapsed: boolean; pathname: string }) {
+  const Icon = item.icon;
+  const active = isActive(pathname, item.href);
+  return (
+    <Link href={item.href} className={`nav-link${active ? " active" : ""}`} aria-current={active ? "page" : undefined}>
+      <span className="nav-icon"><Icon /></span>
+      <span className={collapsed ? "nav-label sr-only" : "nav-label"}>{item.label}</span>
+      {collapsed && <span className="nav-tip" aria-hidden="true">{item.label}</span>}
+    </Link>
+  );
+}
+
 export function AppShell({ children, user }: { children: React.ReactNode; user: { name: string; roles: string[] } }) {
   const pathname = usePathname();
-  const [open, setOpen] = useState(false);
+  const collapsed = useSyncExternalStore(subscribeToCollapse, readCollapse, readCollapseOnServer);
+  const [animated, setAnimated] = useState(false);
+  const [accountOpen, setAccountOpen] = useState(false);
+  const accountRef = useRef<HTMLDivElement>(null);
   const initials = user.name.split(/\s+/).slice(0, 2).map((part) => part[0]).join("").toUpperCase();
+  const rolesLabel = user.roles.join(" · ") || "sem perfil";
+
+  useEffect(() => {
+    if (!accountOpen) return;
+    function onPointerDown(event: MouseEvent) {
+      if (accountRef.current && !accountRef.current.contains(event.target as Node)) setAccountOpen(false);
+    }
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") setAccountOpen(false);
+    }
+    document.addEventListener("mousedown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [accountOpen]);
+
+  function toggleSidebar() {
+    setAnimated(true);
+    try {
+      window.localStorage.setItem(COLLAPSE_KEY, collapsed ? "0" : "1");
+    } catch {
+      /* armazenamento indisponível: preferência não é preservada */
+    }
+    window.dispatchEvent(new Event(COLLAPSE_EVENT));
+  }
 
   return (
-    <div className="app-frame">
+    <div className={`app-frame${collapsed ? " sidebar-collapsed" : ""}${animated ? " shell-ready" : ""}`}>
       <header className="mobile-header">
-        <Link href="/" className="brand-lockup" aria-label="RDO Interproject, início">
-          <span className="brand-mark">R</span><span><strong>RDO</strong><small>INTERPROJECT</small></span>
+        <Link href="/" className="brand-lockup" aria-label="InterProject, ir para a visão geral">
+          <Image src={interprojectLogo} alt="InterProject" className="brand-logo" priority unoptimized />
         </Link>
-        <button className="icon-button" type="button" onClick={() => setOpen(!open)} aria-label={open ? "Fechar menu" : "Abrir menu"} aria-expanded={open}>
-          {open ? <CloseIcon /> : <MenuIcon />}
-        </button>
+        <div className="account-menu" ref={accountRef}>
+          <button
+            type="button"
+            className="avatar avatar-button"
+            onClick={() => setAccountOpen((open) => !open)}
+            aria-expanded={accountOpen}
+            aria-haspopup="menu"
+            aria-label={`Conta de ${user.name}`}
+          >
+            {initials}
+          </button>
+          {accountOpen && (
+            <div className="account-popover" role="menu">
+              <div className="account-identity">
+                <strong>{user.name}</strong>
+                <small>{rolesLabel}</small>
+              </div>
+              <Link href="/settings" className="account-action" role="menuitem" onClick={() => setAccountOpen(false)}>
+                <SettingsIcon />
+                Configurações
+              </Link>
+              <form action={logoutAction}>
+                <button type="submit" className="account-action account-action-danger" role="menuitem">
+                  <LogoutIcon />
+                  Sair da conta
+                </button>
+              </form>
+            </div>
+          )}
+        </div>
       </header>
 
-      <aside className={`sidebar ${open ? "sidebar-open" : ""}`}>
+      <aside className="sidebar" aria-label="Barra lateral">
         <div className="sidebar-head">
-          <Link href="/" className="brand-lockup" onClick={() => setOpen(false)}>
-            <span className="brand-mark">R</span><span><strong>RDO</strong><small>INTERPROJECT</small></span>
+          <Link href="/" className="brand-lockup" aria-label="InterProject, ir para a visão geral">
+            <Image src={interprojectLogo} alt="InterProject" className="brand-logo" priority unoptimized />
           </Link>
-          <p>Diário de obra e horas</p>
+          <p className="sidebar-tagline">Sistema interno</p>
+          <button
+            type="button"
+            className="sidebar-toggle"
+            onClick={toggleSidebar}
+            aria-label={collapsed ? "Expandir barra lateral" : "Recolher barra lateral"}
+            aria-pressed={collapsed}
+          >
+            {collapsed ? <PanelLeftOpenIcon /> : <PanelLeftCloseIcon />}
+            <span className="nav-tip" aria-hidden="true">{collapsed ? "Expandir" : "Recolher"}</span>
+          </button>
         </div>
+
         <nav className="sidebar-nav" aria-label="Navegação principal">
-          {navigation.map((item) => {
-            const Icon = item.icon;
-            return <Link key={item.href} href={item.href} className={isActive(pathname, item.href) ? "active" : ""} onClick={() => setOpen(false)}><Icon /><span>{item.label}</span></Link>;
-          })}
+          {primaryNavigation.map((item) => <NavLink key={item.href} item={item} collapsed={collapsed} pathname={pathname} />)}
         </nav>
-        <div className="sidebar-user">
-          <span className="avatar">{initials}</span>
-          <span className="user-copy"><strong>{user.name}</strong><small>{user.roles.join(" · ") || "sem perfil"}</small></span>
-          <form action={logoutAction}><button type="submit" className="icon-button" aria-label="Sair"><LogoutIcon /></button></form>
+
+        <div className="sidebar-foot">
+          <NavLink item={settingsItem} collapsed={collapsed} pathname={pathname} />
+          <div className="sidebar-user">
+            <span className="avatar" aria-hidden="true">{initials}</span>
+            <span className="user-copy">
+              <strong>{user.name}</strong>
+              <small>{rolesLabel}</small>
+            </span>
+            <form action={logoutAction}>
+              <button type="submit" className="icon-button sidebar-logout" aria-label={`Sair da conta de ${user.name}`}>
+                <LogoutIcon />
+                <span className="nav-tip" aria-hidden="true">Sair</span>
+              </button>
+            </form>
+          </div>
         </div>
       </aside>
-      {open && <button type="button" className="sidebar-backdrop" onClick={() => setOpen(false)} aria-label="Fechar menu" />}
 
       <main className="app-main">{children}</main>
 
-      <nav className="bottom-nav" aria-label="Navegação para celular">
+      <nav className="bottom-nav" aria-label="Navegação principal">
         {navigation.map((item) => {
           const Icon = item.icon;
-          return <Link key={item.href} href={item.href} className={isActive(pathname, item.href) ? "active" : ""}><Icon /><span>{item.shortLabel}</span></Link>;
+          const active = isActive(pathname, item.href);
+          return (
+            <Link key={item.href} href={item.href} className={active ? "active" : ""} aria-current={active ? "page" : undefined}>
+              <Icon />
+              <span className="sr-only">{item.label}</span>
+            </Link>
+          );
         })}
       </nav>
     </div>

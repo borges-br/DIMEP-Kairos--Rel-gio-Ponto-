@@ -4,3 +4,4 @@
 *.log
 tmp/
 .tmp_review/
+/.references/

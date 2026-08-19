@@ -7,8 +7,8 @@ export default function manifest(): MetadataRoute.Manifest {
     description: "RDO, apontamento de horas e integração operacional.",
     start_url: "/",
     display: "standalone",
-    background_color: "#f4f7fb",
-    theme_color: "#0f766e",
+    background_color: "#0d151d",
+    theme_color: "#0d151d",
     lang: "pt-BR",
   };
 }

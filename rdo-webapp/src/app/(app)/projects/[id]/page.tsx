@@ -16,7 +16,7 @@ export default async function ProjectDetailPage({ params, searchParams }: { para
   const selectedTask = detail.tasks.find((task) => task.id === requestedTask) || detail.tasks[0];
 
   return <div className="page-container wide-page">
-    <Breadcrumbs items={[{ label: "Início", href: "/" }, { label: "Projetos", href: "/projects" }, { label: `${detail.project.code} · ${detail.project.name}` }]} />
+    <Breadcrumbs items={[{ label: "Visão geral", href: "/" }, { label: "Projetos", href: "/projects" }, { label: `${detail.project.code} · ${detail.project.name}` }]} />
     <header className="page-header"><div><span className="eyebrow">{detail.project.code} · PROJETO IMUV</span><h1>{detail.project.name}</h1><p>Cliente: {detail.project.client_name}</p></div><Link href={`/rdos/new?project=${detail.project.id}`} className="button button-primary">Novo RDO <ArrowIcon /></Link></header>
     <section className="detail-summary"><article><ClipboardIcon /><span><small>Tarefas ativas</small><strong>{detail.tasks.length}</strong></span></article><article><UsersIcon /><span><small>Equipe vinculada</small><strong>{detail.members.length}</strong></span></article></section>
     <section className="panel detail-panel"><div className="panel-heading"><div><h2>Etapas e tarefas do projeto</h2><p>Abas sincronizadas do IMUV; Instalação, Manutenção, Testes e Comissionamento aparecem quando existirem na fonte mestre.</p></div></div>
