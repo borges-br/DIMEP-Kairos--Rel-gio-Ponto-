@@ -1,5 +1,6 @@
 import "server-only";
 
+import type { PoolClient } from "pg";
 import { withTenant } from "@/lib/db";
 import { getSafeIntegrationConfiguration } from "@/lib/integrations/config";
 import { requireSession } from "@/lib/auth/session";
@@ -287,6 +288,54 @@ export type HoursOverviewRow = {
   divergences: HoursDivergenceDetail[];
 };
 
+/**
+ * Divergencias pendentes com o contexto necessario para revisao. A mesma lista
+ * alimenta Apontamentos e a ficha do colaborador; sem colaboratorId devolve toda
+ * a organizacao.
+ */
+async function loadDivergenceDetails(client: PoolClient, organizationId: string, collaboratorId: string | null) {
+  const result = await client.query<HoursDivergenceDetail>(
+    `select d.id, 'rdo'::text as source, r.work_date::text, a.collaborator_id,
+            d.divergence_type as issue_type, d.justification as explanation,
+            d.review_status as status,
+            case when a.original_start_at is null or a.original_end_at is null then null
+                 else to_char(a.original_start_at at time zone o.timezone, 'HH24:MI') || '–' || to_char(a.original_end_at at time zone o.timezone, 'HH24:MI') end as original_interval,
+            to_char(a.declared_start_at at time zone o.timezone, 'HH24:MI') || '–' || to_char(a.declared_end_at at time zone o.timezone, 'HH24:MI') as declared_interval,
+            r.id as rdo_id, p.code || ' · ' || p.name as project_label,
+            t.code || ' · ' || t.name as task_label
+       from rdo.time_divergences d
+       join rdo.work_allocations a on a.id = d.allocation_id
+       join rdo.rdo_versions v on v.id = a.rdo_version_id
+       join rdo.rdos r on r.id = v.rdo_id
+       join rdo.projects p on p.id = r.project_id
+       join rdo.rdo_activity_groups g on g.id = a.activity_group_id
+       join rdo.tasks t on t.id = g.task_id
+       join rdo.organizations o on o.id = d.organization_id
+      where d.organization_id = $1 and d.review_status <> 'accepted'
+        and a.allocation_status = 'active'
+        and ($2::uuid is null or a.collaborator_id = $2)
+     union all
+     select di.id, 'dimep'::text as source, di.work_date::text, di.collaborator_id,
+            di.issue_type, coalesce(nullif(di.details->>'message',''), nullif(di.details->>'reason',''),
+              case di.issue_type
+                when 'missing_end' then 'Existe uma entrada sem a batida de saída correspondente.'
+                when 'duplicate_time' then 'Foram recebidas batidas repetidas no mesmo horário.'
+                when 'cross_midnight' then 'A jornada atravessa a meia-noite e precisa de conferência.'
+                when 'invalid_punch' then 'A batida recebida possui data ou horário inválido.'
+                else 'A sincronização DIMEP identificou uma inconsistência que exige revisão.' end) as explanation,
+            di.resolution_status as status, null as original_interval, null as declared_interval,
+            null::uuid as rdo_id, null::text as project_label, null::text as task_label
+       from rdo.dimep_sync_issues di
+      where di.organization_id = $1 and di.collaborator_id is not null
+        and di.work_date is not null and di.resolution_status = 'open'
+        and ($2::uuid is null or di.collaborator_id = $2)
+      order by work_date desc, collaborator_id
+      limit 400`,
+    [organizationId, collaboratorId],
+  );
+  return result.rows;
+}
+
 export async function getHoursOverview() {
   const session = await requireSession();
   return withTenant(session.organizationId, async (client) => {
@@ -337,50 +386,14 @@ export async function getHoursOverview() {
         limit 100`,
       [session.organizationId],
     );
-    const details = await client.query<HoursDivergenceDetail>(
-      `select d.id, 'rdo'::text as source, r.work_date::text, a.collaborator_id,
-              d.divergence_type as issue_type, d.justification as explanation,
-              d.review_status as status,
-              case when a.original_start_at is null or a.original_end_at is null then null
-                   else to_char(a.original_start_at at time zone o.timezone, 'HH24:MI') || '–' || to_char(a.original_end_at at time zone o.timezone, 'HH24:MI') end as original_interval,
-              to_char(a.declared_start_at at time zone o.timezone, 'HH24:MI') || '–' || to_char(a.declared_end_at at time zone o.timezone, 'HH24:MI') as declared_interval,
-              r.id as rdo_id, p.code || ' · ' || p.name as project_label,
-              t.code || ' · ' || t.name as task_label
-         from rdo.time_divergences d
-         join rdo.work_allocations a on a.id = d.allocation_id
-         join rdo.rdo_versions v on v.id = a.rdo_version_id
-         join rdo.rdos r on r.id = v.rdo_id
-         join rdo.projects p on p.id = r.project_id
-         join rdo.rdo_activity_groups g on g.id = a.activity_group_id
-         join rdo.tasks t on t.id = g.task_id
-         join rdo.organizations o on o.id = d.organization_id
-        where d.organization_id = $1 and d.review_status <> 'accepted'
-          and a.allocation_status = 'active'
-       union all
-       select di.id, 'dimep'::text as source, di.work_date::text, di.collaborator_id,
-              di.issue_type, coalesce(nullif(di.details->>'message',''), nullif(di.details->>'reason',''),
-                case di.issue_type
-                  when 'missing_end' then 'Existe uma entrada sem a batida de saída correspondente.'
-                  when 'duplicate_time' then 'Foram recebidas batidas repetidas no mesmo horário.'
-                  when 'cross_midnight' then 'A jornada atravessa a meia-noite e precisa de conferência.'
-                  when 'invalid_punch' then 'A batida recebida possui data ou horário inválido.'
-                  else 'A sincronização DIMEP identificou uma inconsistência que exige revisão.' end) as explanation,
-              di.resolution_status as status, null as original_interval, null as declared_interval,
-              null::uuid as rdo_id, null::text as project_label, null::text as task_label
-         from rdo.dimep_sync_issues di
-        where di.organization_id = $1 and di.collaborator_id is not null
-          and di.work_date is not null and di.resolution_status = 'open'
-        order by work_date desc, collaborator_id
-        limit 400`,
-      [session.organizationId],
-    );
+    const details = await loadDivergenceDetails(client, session.organizationId, null);
     const exportable = await client.query<{ count: string }>(
       "select count(*)::text from rdo.v_imuv_timer_candidates where organization_id = $1",
       [session.organizationId],
     );
     const rows: HoursOverviewRow[] = result.rows.map((row) => ({
       ...row,
-      divergences: details.rows.filter((detail) => detail.source === row.source
+      divergences: details.filter((detail) => detail.source === row.source
         && detail.work_date === row.work_date && detail.collaborator_id === row.collaborator_id),
     }));
     return { session, rows, exportableCount: Number(exportable.rows[0]?.count ?? 0) };
@@ -639,7 +652,7 @@ export async function getEmployeeDetail(collaboratorId: string) {
     );
     if (!profile.rows[0]) return null;
 
-    const [projects, workHistory, occurrences, quality, dimepIssues, account] = await Promise.all([
+    const [projects, workHistory, punches, occurrences, quality, dimepIssues, account] = await Promise.all([
       client.query<{ id: string; code: string; name: string; status: string; source: string }>(
         `select p.id, p.code, p.name, p.status_normalized as status, pm.source
            from rdo.project_members pm join rdo.projects p on p.id = pm.project_id
@@ -667,8 +680,38 @@ export async function getEmployeeDetail(collaboratorId: string) {
           order by r.work_date desc, a.declared_start_at desc limit 50`,
         [session.organizationId, collaboratorId],
       ),
+      // Jornada como o relogio de ponto entregou, com a cobertura por RDO do mesmo dia.
+      client.query<{
+        work_date: string; interval_label: string; total_minutes: number;
+        segment_count: string; allocated_minutes: number | null; open_issues: string;
+      }>(
+        `select ts.work_date::text,
+                string_agg(to_char(ts.original_start_at at time zone o.timezone, 'HH24:MI') || '–'
+                  || to_char(ts.original_end_at at time zone o.timezone, 'HH24:MI'),
+                  ', ' order by ts.original_start_at) as interval_label,
+                round(sum(extract(epoch from (ts.original_end_at - ts.original_start_at)) / 60))::int as total_minutes,
+                count(*)::text as segment_count,
+                (select round(sum(extract(epoch from (a.declared_end_at - a.declared_start_at)) / 60))::int
+                   from rdo.work_allocations a
+                   join rdo.rdo_versions v on v.id = a.rdo_version_id
+                   join rdo.rdos r on r.id = v.rdo_id
+                  where a.organization_id = $1 and a.collaborator_id = $2
+                    and a.allocation_status = 'active' and r.work_date = ts.work_date) as allocated_minutes,
+                (select count(*)::text from rdo.dimep_sync_issues di
+                  where di.organization_id = $1 and di.collaborator_id = $2
+                    and di.work_date = ts.work_date and di.resolution_status = 'open') as open_issues
+           from rdo.time_segments ts
+           join rdo.organizations o on o.id = ts.organization_id
+          where ts.organization_id = $1 and ts.collaborator_id = $2
+            and ts.segment_status = 'closed'
+            and ts.work_date >= current_date - 45
+          group by ts.work_date
+          order by ts.work_date desc
+          limit 45`,
+        [session.organizationId, collaboratorId],
+      ),
       client.query<{ id: string; rdo_id: string; work_date: string; project_name: string; severity: string; description: string; status: string }>(
-        `select distinct oc.id, r.id as rdo_id, r.work_date::text, p.name as project_name,
+        `select oc.id, r.id as rdo_id, r.work_date::text, p.name as project_name,
                 oc.severity, oc.description, oc.status
            from rdo.rdo_occurrences oc
            join rdo.rdo_versions v on v.id = oc.rdo_version_id
@@ -680,7 +723,7 @@ export async function getEmployeeDetail(collaboratorId: string) {
         [session.organizationId, collaboratorId],
       ),
       client.query<{ id: string; rdo_id: string; work_date: string; project_name: string; record_type: string; result: string; description: string }>(
-        `select distinct q.id, r.id as rdo_id, r.work_date::text, p.name as project_name,
+        `select q.id, r.id as rdo_id, r.work_date::text, p.name as project_name,
                 q.record_type, q.result, q.description
            from rdo.rdo_quality_records q
            join rdo.rdo_versions v on v.id = q.rdo_version_id
@@ -707,6 +750,11 @@ export async function getEmployeeDetail(collaboratorId: string) {
         [session.organizationId, collaboratorId],
       ),
     ]);
-    return { session, employee: profile.rows[0], account: account.rows[0] ?? null, projects: projects.rows, workHistory: workHistory.rows, occurrences: occurrences.rows, quality: quality.rows, dimepIssues: dimepIssues.rows };
+    const divergences = await loadDivergenceDetails(client, session.organizationId, collaboratorId);
+    return {
+      session, employee: profile.rows[0], account: account.rows[0] ?? null,
+      projects: projects.rows, workHistory: workHistory.rows, punches: punches.rows,
+      occurrences: occurrences.rows, quality: quality.rows, dimepIssues: dimepIssues.rows, divergences,
+    };
   });
 }
