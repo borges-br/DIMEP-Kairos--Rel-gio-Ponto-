@@ -6,8 +6,10 @@
 - `002_create_runtime_user.sh`: cria o login restrito usado pelo backend.
 - `003_field_diary_extensions.sql`: adiciona PT por atividade e transcrição de mídia.
 - `004_collaborator_profile_overrides.sql`: adiciona correções cadastrais locais sem sobrescrever as fontes sincronizadas.
-- `006_hr_employee_imuv.sql`: adiciona o perfil RH e campos cadastrais auditáveis usados na prévia de envio de funcionários ao IMUV.
 - `005_dimep_sync_issues.sql`: registra, sem vínculo obrigatório com RDO, pendências de identidade e pareamento vindas do DIMEP.
+- `006_hr_employee_imuv.sql`: adiciona o perfil RH e campos cadastrais auditáveis usados na prévia de envio de funcionários ao IMUV.
+- `007_work_assignments.sql`: registra a distribuição planejada de tarefas para posterior conciliação com IMUV e DIMEP.
+- `008_sanitize_collaborator_labels.sql`: cria `rdo.display_label()` e limpa cargos/departamentos herdados como `[object Object]`.
 - `DICIONARIO_DADOS_MVP.md`: modelo funcional para revisão do diretor.
 - `docker-compose.database.yml`: stack PostgreSQL para Portainer/Docker.
 - `.env.example`: nomes das variáveis, sem credenciais reais.
@@ -27,6 +29,19 @@ Dentro da rede Docker, use host `postgres`, porta `5432`, banco `rdo` e o usuár
 Em toda transação do backend, antes de consultar ou gravar dados, execute `SET LOCAL app.organization_id = '<uuid-do-tenant>';`. As políticas de Row Level Security bloqueiam leitura e escrita fora desse tenant. Criação inicial de usuários/tenants fica restrita ao fluxo administrativo, porque o papel de execução não pode inserir em `app_users` nem em `organizations`.
 
 As credenciais IMUV e DIMEP devem ser Docker Secrets ou variáveis protegidas. Grave no banco somente o nome/referência do secret em `integration_connections.secret_ref`.
+
+## Mídia de rascunho sem vínculo
+
+`POST /api/media/staging` grava a evidência em `media_files` antes de o RDO existir; o vínculo em `evidence_links` só é criado quando o rascunho é salvo. Um formulário abandonado deixa a mídia órfã. Uma rotina periódica deve remover o objeto do storage e a linha correspondente:
+
+```sql
+SELECT m.id, m.object_key
+  FROM rdo.media_files m
+ WHERE NOT EXISTS (SELECT 1 FROM rdo.evidence_links e WHERE e.media_file_id = m.id)
+   AND m.created_at < now() - interval '2 days';
+```
+
+Apague primeiro o objeto no storage e só então a linha, para nunca deixar um registro apontando para um arquivo inexistente.
 
 ## Primeiro cadastro
 

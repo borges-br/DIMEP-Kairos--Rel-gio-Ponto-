@@ -24,7 +24,21 @@ export type ImuvPreview = {
 };
 export type ImuvData = { people: Obj[]; collaborators: Obj[]; projects: Obj[]; tasks: Obj[] };
 
-const asText = (value: unknown) => value === null || value === undefined ? null : String(value).trim() || null;
+const asText = (input: unknown): string | null => {
+  if (input === null || input === undefined || Array.isArray(input)) return null;
+  if (isObject(input)) {
+    for (const key of ["name", "description", "label", "title", "code", "value"]) {
+      const nested = input[key];
+      if (nested !== null && nested !== undefined && typeof nested !== "object") {
+        const result = String(nested).trim();
+        if (result) return result;
+      }
+    }
+    return null;
+  }
+  const result = String(input).trim();
+  return result && result !== "[object Object]" ? result : null;
+};
 const asDigits = (value: unknown) => asText(value)?.replace(/\D/g, "") || null;
 const active = (value: unknown) => value === true || value === 1 || value === "1";
 const date = (value: unknown) => { const result = asText(value); return result && /^\d{4}-\d{2}-\d{2}/.test(result) ? result.slice(0, 10) : null; };
@@ -80,6 +94,8 @@ async function localData(client: PoolClient, organizationId: string) {
                          coalesce(o.full_name_override,c.full_name) as full_name,
                          c.cpf_digits, c.email as source_email, coalesce(o.email_override,c.email) as email,
                          c.phone as source_phone, coalesce(o.phone_override,c.phone) as phone,
+                         c.job_title as source_job_title, coalesce(o.job_title_override,c.job_title) as job_title,
+                         c.department as source_department, coalesce(o.department_override,c.department) as department,
                          c.active as source_active, coalesce(o.active_override,c.active) as active
                     from rdo.collaborator_external_refs er
                    join rdo.collaborators c on c.id=er.collaborator_id
@@ -110,7 +126,9 @@ export async function previewImuv(client: PoolClient, organizationId: string, di
       const id = asText(row.id); if (!id) continue;
       const old = local.collaborators.get(id); const name = asText(row.name) || `Colaborador ${id}`;
       const rawCpf = asDigits(row.cpf_cnpj); const cpf = rawCpf?.length === 11 ? rawCpf : null;
-      const fields = fieldDiffs([["Nome", old?.source_full_name, name], ["CPF", old?.cpf_digits, cpf], ["E-mail", old?.source_email, row.email], ["Telefone", old?.source_phone, row.phone], ["Ativo", old?.source_active, active(row.active)]]);
+      const jobTitle = asText(row.job_level ?? row.profession ?? row.job_title ?? row.function);
+      const department = asText(row.department ?? row.department_name);
+      const fields = fieldDiffs([["Nome", old?.source_full_name, name], ["CPF", old?.cpf_digits, cpf], ["Função", old?.source_job_title, jobTitle], ["Departamento", old?.source_department, department], ["E-mail", old?.source_email, row.email], ["Telefone", old?.source_phone, row.phone], ["Ativo", old?.source_active, active(row.active)]]);
       if (!old || fields.length) items.push({ entity: "collaborator", externalId: id, label: name, action: old ? "update" : "create", fields });
     }
     const projectIds = new Set(data.projects.map((row) => asText(row.id)).filter(Boolean));
@@ -185,14 +203,14 @@ export async function applyImuvPull(client: PoolClient, organizationId: string, 
   }
   const collaboratorIds = new Map<string,string>();
   for (const row of data.collaborators) {
-    const id=asText(row.id); if(!id) continue; const name=asText(row.name)||`Colaborador ${id}`; const rawCpf=asDigits(row.cpf_cnpj); const cpf=rawCpf?.length===11?rawCpf:null; const email=asText(row.email); const phone=asText(row.phone);
+    const id=asText(row.id); if(!id) continue; const name=asText(row.name)||`Colaborador ${id}`; const rawCpf=asDigits(row.cpf_cnpj); const cpf=rawCpf?.length===11?rawCpf:null; const email=asText(row.email); const phone=asText(row.phone); const jobTitle=asText(row.job_level??row.profession??row.job_title??row.function); const department=asText(row.department??row.department_name); const employeeNumber=asText(row.registration??row.employee_number??row.code);
     const linked=await client.query<{id:string}>(`select c.id from rdo.collaborator_external_refs er join rdo.collaborators c on c.id=er.collaborator_id
       where er.organization_id=$1 and er.connection_id=$2 and er.external_id=$3`,[organizationId,connectionId,id]);
     let collaboratorId=linked.rows[0]?.id;
     if(!collaboratorId&&validCpf(cpf)){const same=await client.query<{id:string}>("select id from rdo.collaborators where organization_id=$1 and cpf_digits=$2 and cpf_is_valid limit 1",[organizationId,cpf]);collaboratorId=same.rows[0]?.id;}
-    if(collaboratorId) await client.query(`update rdo.collaborators set full_name=$3,normalized_name=$4,cpf_raw=$5,cpf_digits=$6,cpf_is_valid=$7,employment_status=$8,active=$9,email=$10,phone=$11 where organization_id=$1 and id=$2`,[organizationId,collaboratorId,name,normalized(name),asText(row.cpf_cnpj),cpf,validCpf(cpf),active(row.active)?"active":"inactive",active(row.active),email,phone]);
-    else {const made=await client.query<{id:string}>(`insert into rdo.collaborators (organization_id,full_name,normalized_name,cpf_raw,cpf_digits,cpf_is_valid,employment_status,active,email,phone)
-      values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) returning id`,[organizationId,name,normalized(name),asText(row.cpf_cnpj),cpf,validCpf(cpf),active(row.active)?"active":"inactive",active(row.active),email,phone]);collaboratorId=made.rows[0].id;}
+    if(collaboratorId) await client.query(`update rdo.collaborators set full_name=$3,normalized_name=$4,cpf_raw=$5,cpf_digits=$6,cpf_is_valid=$7,employment_status=$8,active=$9,email=$10,phone=$11,job_title=coalesce($12,job_title),department=coalesce($13,department),employee_number=coalesce($14,employee_number) where organization_id=$1 and id=$2`,[organizationId,collaboratorId,name,normalized(name),asText(row.cpf_cnpj),cpf,validCpf(cpf),active(row.active)?"active":"inactive",active(row.active),email,phone,jobTitle,department,employeeNumber]);
+    else {const made=await client.query<{id:string}>(`insert into rdo.collaborators (organization_id,full_name,normalized_name,cpf_raw,cpf_digits,cpf_is_valid,employment_status,active,email,phone,job_title,department,employee_number)
+      values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) returning id`,[organizationId,name,normalized(name),asText(row.cpf_cnpj),cpf,validCpf(cpf),active(row.active)?"active":"inactive",active(row.active),email,phone,jobTitle,department,employeeNumber]);collaboratorId=made.rows[0].id;}
     await client.query(`insert into rdo.collaborator_external_refs (organization_id,collaborator_id,connection_id,external_id,external_name,external_document_raw,external_document_digits,last_seen_at)
       values ($1,$2,$3,$4,$5,$6,$7,now()) on conflict (connection_id,external_id) do update set collaborator_id=excluded.collaborator_id,external_name=excluded.external_name,external_document_raw=excluded.external_document_raw,external_document_digits=excluded.external_document_digits,last_seen_at=now()`,[organizationId,collaboratorId,connectionId,id,name,asText(row.cpf_cnpj),cpf]);
     collaboratorIds.set(id,collaboratorId);written+=1;await saveSnapshot(client,organizationId,connectionId,runId,"collaborator",row);

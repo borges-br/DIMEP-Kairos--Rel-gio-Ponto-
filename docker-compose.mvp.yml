@@ -19,6 +19,8 @@ services:
       - ./database/003_field_diary_extensions.sql:/docker-entrypoint-initdb.d/003_field_diary_extensions.sql:ro
       - ./database/004_collaborator_profile_overrides.sql:/docker-entrypoint-initdb.d/004_collaborator_profile_overrides.sql:ro
       - ./database/006_hr_employee_imuv.sql:/docker-entrypoint-initdb.d/006_hr_employee_imuv.sql:ro
+      - ./database/007_work_assignments.sql:/docker-entrypoint-initdb.d/007_work_assignments.sql:ro
+      - ./database/008_sanitize_collaborator_labels.sql:/docker-entrypoint-initdb.d/008_sanitize_collaborator_labels.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 10s
@@ -39,6 +41,8 @@ services:
       - ./database/004_collaborator_profile_overrides.sql:/migrations/004_collaborator_profile_overrides.sql:ro
       - ./database/005_dimep_sync_issues.sql:/migrations/005_dimep_sync_issues.sql:ro
       - ./database/006_hr_employee_imuv.sql:/migrations/006_hr_employee_imuv.sql:ro
+      - ./database/007_work_assignments.sql:/migrations/007_work_assignments.sql:ro
+      - ./database/008_sanitize_collaborator_labels.sql:/migrations/008_sanitize_collaborator_labels.sql:ro
     entrypoint: ["/bin/sh", "-ec"]
     command:
       - >-
@@ -47,6 +51,8 @@ services:
         -f /migrations/004_collaborator_profile_overrides.sql
         -f /migrations/005_dimep_sync_issues.sql
         -f /migrations/006_hr_employee_imuv.sql
+        -f /migrations/007_work_assignments.sql
+        -f /migrations/008_sanitize_collaborator_labels.sql
     environment:
       PGPASSWORD: ${POSTGRES_PASSWORD:?defina POSTGRES_PASSWORD}
       POSTGRES_USER: ${POSTGRES_USER:-rdo_admin}

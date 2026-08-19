@@ -1,6 +1,6 @@
 import { Sk, SkBreadcrumbs, SkPage, SkPageHeader } from "@/components/skeleton";
 
-const headers = ["Data", "Colaborador", "Origem / etapa", "Tempo", "Linhas", "Conciliação"];
+const headers = ["Data", "Colaborador", "Origem / etapa", "Tempo", "Alocações", "Conciliação"];
 
 export default function Loading() {
   return (

@@ -6,6 +6,7 @@ import { redirect } from "next/navigation";
 import { z } from "zod";
 import { withTenant } from "@/lib/db";
 import { requireAnyRole } from "@/lib/auth/session";
+import { maxEvidenceFiles } from "@/lib/media";
 
 export type RdoFormState = { error?: string } | undefined;
 
@@ -125,10 +126,12 @@ export async function createRdoAction(_state: RdoFormState, formData: FormData):
   let activities: unknown = null;
   let materials: unknown = null;
   let equipmentUsage: unknown = null;
+  let evidenceMediaIds: unknown = null;
   try {
     activities = JSON.parse(String(formData.get("activities") ?? "null"));
     materials = JSON.parse(String(formData.get("materials") ?? "[]"));
     equipmentUsage = JSON.parse(String(formData.get("equipmentUsage") ?? "[]"));
+    evidenceMediaIds = JSON.parse(String(formData.get("evidenceMediaIds") ?? "[]"));
   } catch {
     return { error: "As atividades enviadas estão inválidas. Recarregue a página." };
   }
@@ -168,6 +171,13 @@ export async function createRdoAction(_state: RdoFormState, formData: FormData):
   }
 
   const input = parsed.data;
+  // As evidências já subiram por /api/media/staging enquanto o líder preenchia o
+  // formulário; aqui chegam apenas os identificadores para criar o vínculo.
+  const parsedEvidence = z.array(z.string().uuid()).max(maxEvidenceFiles).safeParse(evidenceMediaIds);
+  const evidenceCaption = String(formData.get("evidenceCaption") || "").trim().slice(0, 500);
+  if (!parsedEvidence.success) return { error: `Selecione no máximo ${maxEvidenceFiles} evidências por rascunho.` };
+  // Arquivos idênticos compartilham o mesmo registro de mídia (deduplicação por sha256).
+  const evidenceIds = [...new Set(parsedEvidence.data)];
   const requestHeaders = await headers();
   try {
     await withTenant(session.organizationId, async (client) => {
@@ -346,20 +356,22 @@ export async function createRdoAction(_state: RdoFormState, formData: FormData):
             equipment.downtimeMinutes, equipment.downtimeReason || null],
         );
       }
+      let occurrenceId: string | null = null;
       if (input.hasOccurrence) {
         const occurredAt = await client.query<{ occurred_at: Date }>(
           `select (($2::date + $3::time) at time zone timezone) as occurred_at
              from rdo.organizations where id = $1`,
           [session.organizationId, input.workDate, input.occurrenceTime],
         );
-        await client.query(
+        const occurrence = await client.query<{ id: string }>(
           `insert into rdo.rdo_occurrences
             (organization_id, rdo_version_id, occurrence_type, severity, occurred_at,
              description, immediate_action, created_by_user_id)
-           values ($1,$2,$3,$4,$5,$6,$7,$8)`,
+           values ($1,$2,$3,$4,$5,$6,$7,$8) returning id`,
           [session.organizationId, versionId, input.occurrenceType, input.occurrenceSeverity,
             occurredAt.rows[0].occurred_at, input.occurrenceDescription, input.occurrenceAction, session.userId],
         );
+        occurrenceId = occurrence.rows[0].id;
       }
       if (input.hasQuality) {
         await client.query(
@@ -379,13 +391,40 @@ export async function createRdoAction(_state: RdoFormState, formData: FormData):
         }
       }
 
+      if (evidenceIds.length) {
+        // Só entram as mídias que este usuário acabou de enviar e que ainda não
+        // pertencem a nenhum RDO, para que um id copiado não vincule evidência alheia.
+        const owned = await client.query<{ id: string }>(
+          `select m.id from rdo.media_files m
+            where m.organization_id = $1 and m.id = any($2::uuid[])
+              and m.uploaded_by_user_id = $3
+              and not exists (select 1 from rdo.evidence_links e where e.media_file_id = m.id)`,
+          [session.organizationId, evidenceIds, session.userId],
+        );
+        if (owned.rows.length !== evidenceIds.length) throw new Error("EVIDENCE_NOT_AVAILABLE");
+        for (const media of owned.rows) {
+          await client.query(
+            `insert into rdo.evidence_links (organization_id, media_file_id, rdo_version_id, caption)
+             values ($1,$2,$3,$4) on conflict do nothing`,
+            [session.organizationId, media.id, versionId, evidenceCaption || null],
+          );
+          if (occurrenceId) {
+            await client.query(
+              `insert into rdo.evidence_links (organization_id, media_file_id, occurrence_id, caption)
+               values ($1,$2,$3,$4) on conflict do nothing`,
+              [session.organizationId, media.id, occurrenceId, evidenceCaption || null],
+            );
+          }
+        }
+      }
+
       await client.query("update rdo.rdos set current_version_id = $1 where organization_id = $2 and id = $3", [versionId, session.organizationId, rdoId]);
       await client.query(
         `insert into rdo.audit_events
           (organization_id, actor_user_id, entity_table, entity_id, action, new_data, request_id, source_ip, user_agent)
          values ($1,$2,'rdos',$3,'insert',$4::jsonb,$5,$6,$7)`,
         [session.organizationId, session.userId, rdoId,
-          JSON.stringify({ projectId: input.projectId, workDate: input.workDate, activityCount: input.activities.length }),
+          JSON.stringify({ projectId: input.projectId, workDate: input.workDate, activityCount: input.activities.length, evidenceCount: evidenceIds.length }),
           requestHeaders.get("x-request-id"), requestHeaders.get("x-forwarded-for")?.split(",")[0]?.trim() || null,
           requestHeaders.get("user-agent")?.slice(0, 500) || null],
       );
@@ -397,6 +436,7 @@ export async function createRdoAction(_state: RdoFormState, formData: FormData):
       if (error.message === "INVALID_SCOPE") return { error: "Tarefa/local não pertence ao projeto ou há um funcionário inativo na equipe." };
       if (error.message === "INVALID_RESOURCE") return { error: "Um material ou equipamento não pertence ao catálogo ativo." };
       if (error.message === "DIVERGENCE_REASON_REQUIRED") return { error: "Informe a justificativa de horário: não há cobertura DIMEP para toda a atividade." };
+      if (error.message === "EVIDENCE_NOT_AVAILABLE") return { error: "Uma das evidências não está mais disponível. Envie as fotos e áudios novamente." };
     }
     console.error("Falha ao criar RDO", error);
     return { error: "Não foi possível salvar o RDO. Nenhum dado parcial foi gravado." };

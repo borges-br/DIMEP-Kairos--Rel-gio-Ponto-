@@ -1,21 +1,12 @@
 import { createHash, randomUUID } from "node:crypto";
 import { getSession } from "@/lib/auth/session";
 import { withTenant } from "@/lib/db";
+import { evidenceMimeTypes, evidenceRejection } from "@/lib/media";
 import { objectStorageConfig, putObject } from "@/lib/object-storage";
 
 export const runtime = "nodejs";
 
 const allowedRoles = new Set(["leader", "foreman", "manager", "director", "admin"]);
-const allowedMimeTypes = new Map([
-  ["image/jpeg", "jpg"],
-  ["image/png", "png"],
-  ["image/webp", "webp"],
-  ["audio/webm", "webm"],
-  ["audio/mpeg", "mp3"],
-  ["audio/mp4", "m4a"],
-  ["audio/wav", "wav"],
-  ["audio/ogg", "ogg"],
-]);
 
 function error(message: string, status: number) {
   return Response.json({ error: message }, { status });
@@ -48,15 +39,11 @@ export async function POST(request: Request) {
   const activityGroupId = String(data.get("activityGroupId") || "");
   const caption = String(data.get("caption") || "").trim().slice(0, 500);
   const files = data.getAll("files").filter((item): item is File => item instanceof File && item.size > 0);
-  const maxBytes = Math.max(1, Number(process.env.MEDIA_MAX_FILE_MB || 15)) * 1024 * 1024;
 
   if (!/^[0-9a-f-]{36}$/i.test(rdoId)) return error("RDO inválido.", 400);
   if (activityGroupId && !/^[0-9a-f-]{36}$/i.test(activityGroupId)) return error("Atividade inválida.", 400);
-  if (!files.length || files.length > 8) return error("Envie de 1 a 8 arquivos por vez.", 400);
-  for (const file of files) {
-    if (!allowedMimeTypes.has(file.type)) return error(`Formato não permitido: ${file.name}.`, 415);
-    if (file.size > maxBytes) return error(`${file.name} excede o limite de ${process.env.MEDIA_MAX_FILE_MB || 15} MB.`, 413);
-  }
+  const rejection = evidenceRejection(files);
+  if (rejection) return error(rejection.message, rejection.status);
 
   try {
     const uploaded = await withTenant(session.organizationId, async (client) => {
@@ -90,7 +77,7 @@ export async function POST(request: Request) {
         );
         let mediaId = existing.rows[0]?.id;
         if (!mediaId) {
-          const extension = allowedMimeTypes.get(file.type)!;
+          const extension = evidenceMimeTypes.get(file.type)!;
           const datePath = version.work_date.replaceAll("-", "/");
           const objectKey = `${session.organizationId}/${datePath}/${rdoId}/${randomUUID()}.${extension}`;
           await putObject(objectKey, bytes, file.type);

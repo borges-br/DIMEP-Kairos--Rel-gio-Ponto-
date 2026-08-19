@@ -5,6 +5,8 @@ import { useFormStatus } from "react-dom";
 import { createRdoAction } from "@/app/actions/rdo";
 import type { RdoCatalogOption, RdoFormProject } from "@/lib/dal";
 import { CloudIcon, CloseIcon, PlusIcon, RainIcon, ShieldIcon, SunIcon, UsersIcon, WarningIcon, WindIcon } from "@/components/icons";
+import { CollaboratorPicker } from "@/components/collaborator-picker";
+import { EvidenceUploader } from "@/components/evidence-uploader";
 
 type ActivityDraft = {
   key: string;
@@ -47,9 +49,9 @@ const emptyActivity = (key: string, project?: RdoFormProject, requestedTaskId = 
   });
 };
 
-function SubmitButton() {
+function SubmitButton({ uploading }: { uploading: boolean }) {
   const { pending } = useFormStatus();
-  return <button type="submit" className="button button-primary button-large" disabled={pending}>{pending ? "Salvando com segurança…" : "Salvar RDO como rascunho"}</button>;
+  return <button type="submit" className="button button-primary button-large" disabled={pending || uploading}>{pending ? "Salvando com segurança…" : uploading ? "Aguardando as evidências…" : "Salvar RDO como rascunho"}</button>;
 }
 
 export function NewRdoForm({
@@ -80,6 +82,7 @@ export function NewRdoForm({
   const [hasQuality, setHasQuality] = useState(false);
   const [materialRows, setMaterialRows] = useState<MaterialDraft[]>([]);
   const [equipmentRows, setEquipmentRows] = useState<EquipmentDraft[]>([]);
+  const [uploadingEvidence, setUploadingEvidence] = useState(false);
   const project = projects.find((item) => item.id === projectId);
 
   const serializedActivities = useMemo(() => JSON.stringify(activities.map((item) => ({
@@ -134,15 +137,6 @@ export function NewRdoForm({
     updateActivity(activity.key, { taskId, collaboratorIds: suggested });
   }
 
-  function toggleMember(activity: ActivityDraft, collaboratorId: string) {
-    const selected = activity.collaboratorIds.includes(collaboratorId);
-    updateActivity(activity.key, {
-      collaboratorIds: selected
-        ? activity.collaboratorIds.filter((id) => id !== collaboratorId)
-        : [...activity.collaboratorIds, collaboratorId],
-    });
-  }
-
   const today = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Sao_Paulo" }).format(new Date());
 
   return (
@@ -180,7 +174,7 @@ export function NewRdoForm({
               </div>
               <label className="field-group"><span>Serviço executado <b>*</b></span><textarea className="input-field" rows={3} value={activity.description} onChange={(event) => updateActivity(activity.key, { description: event.target.value })} minLength={10} maxLength={2000} required placeholder="Descreva objetivamente o que foi executado…" /></label>
               <div className="permit-box"><div className="permit-heading"><ShieldIcon /><div><strong>Permissão de Trabalho (PT)</strong><span>Opcional. Se informada, o número identifica a liberação desta tarefa.</span></div></div><div className="form-grid three-columns"><label className="field-group"><span>Número da PT</span><input className="input-field" value={activity.ptNumber} onChange={(event) => updateActivity(activity.key, { ptNumber: event.target.value })} maxLength={100} placeholder="Ex.: 45872" /></label><label className="field-group"><span>Abertura</span><input className="input-field" type="time" value={activity.ptOpenTime} onInput={(event) => updateActivity(activity.key, { ptOpenTime: event.currentTarget.value })} /></label><label className="field-group"><span>Fechamento</span><input className="input-field" type="time" value={activity.ptCloseTime} onInput={(event) => updateActivity(activity.key, { ptCloseTime: event.currentTarget.value })} /></label></div>{(activity.ptOpenTime || activity.ptCloseTime) && !activity.ptNumber && <p className="inline-warning"><WarningIcon />Informe o número da PT quando houver horário de abertura ou fechamento.</p>}</div>
-              <fieldset className="team-fieldset"><legend><UsersIcon /> Equipe nesta atividade <b>*</b></legend><p className="field-help">Pré-seleção: responsáveis da tarefa no IMUV; na ausência, equipe do projeto. Você pode incluir ou remover qualquer funcionário ativo.</p>{project?.collaborators.length ? <div className="member-grid">{project.collaborators.map((member) => <label className={`member-option ${activity.collaboratorIds.includes(member.id) ? "selected" : ""}`} key={member.id}><input type="checkbox" checked={activity.collaboratorIds.includes(member.id)} onChange={() => toggleMember(activity, member.id)} /><span><strong>{member.name}</strong><small>{member.jobTitle || "Função não informada"}{member.projectMember ? " · equipe do projeto" : " · cadastro geral"}</small></span></label>)}</div> : <p className="empty-copy">Nenhum funcionário ativo foi conciliado entre DIMEP, IMUV e banco local.</p>}</fieldset>
+              {project?.collaborators.length ? <CollaboratorPicker collaborators={project.collaborators} selectedIds={activity.collaboratorIds} onChange={(collaboratorIds) => updateActivity(activity.key, { collaboratorIds })} /> : <fieldset className="team-fieldset"><legend><UsersIcon /> Equipe nesta atividade <b>*</b></legend><p className="empty-copy">Nenhum funcionário ativo foi conciliado entre DIMEP, IMUV e banco local.</p></fieldset>}
               <label className="field-group"><span>Justificativa se faltar cobertura DIMEP</span><textarea className="input-field" rows={2} value={activity.divergenceReason} onChange={(event) => updateActivity(activity.key, { divergenceReason: event.target.value })} maxLength={1000} placeholder="Ex.: batida de retorno ainda não sincronizada. Será exigida somente quando houver divergência." /></label>
             </article>
           ))}
@@ -227,15 +221,14 @@ export function NewRdoForm({
 
       <section className="form-section evidence-section">
         <div className="section-heading"><span className="step-number">4</span><div><h2>Evidências e áudio</h2><p>Fotos e áudios serão vinculados ao projeto, tarefa, data, hora, usuário e versão do RDO.</p></div></div>
-        <div className="evidence-grid"><div className="evidence-placeholder"><strong>Fotos do serviço</strong><span>Múltiplas imagens, câmera do celular, hash e metadados de captura.</span><button className="button button-secondary" type="button" disabled>Adicionar foto</button></div><div className="evidence-placeholder"><strong>Áudio original + transcrição</strong><span>O arquivo original será preservado; a transcrição ficará em registro derivado.</span><button className="button button-secondary" type="button" disabled>Gravar áudio</button></div></div>
-        <p className="readiness-note">Após salvar o rascunho, abra o RDO para fotografar, anexar imagens ou enviar áudio ao MinIO.</p>
+        <EvidenceUploader onPendingChange={setUploadingEvidence} />
       </section>
 
       <details className="optional-section" open={hasOccurrence || hasQuality}>
         <summary>Ocorrências e qualidade <span>Condicional</span></summary>
         <div className="details-body">
           <label className="check-row"><input name="hasOccurrence" type="checkbox" checked={hasOccurrence} onChange={(event) => setHasOccurrence(event.target.checked)} /><span>Houve incidente, acidente, bloqueio ou quase acidente</span></label>
-          {hasOccurrence && <div className="conditional-box"><p className="inline-warning"><WarningIcon />Uma ocorrência exige detalhes e evidência antes do envio para aprovação.</p><div className="form-grid three-columns"><label className="field-group"><span>Tipo <b>*</b></span><select className="input-field" name="occurrenceType" required><option value="">Selecione</option><option value="incident">Incidente</option><option value="accident">Acidente</option><option value="blockage">Bloqueio</option><option value="near_miss">Quase acidente</option><option value="other">Outro</option></select></label><label className="field-group"><span>Severidade <b>*</b></span><select className="input-field" name="occurrenceSeverity" required><option value="">Selecione</option><option value="low">Baixa</option><option value="medium">Média</option><option value="high">Alta</option><option value="critical">Crítica</option></select></label><label className="field-group"><span>Horário <b>*</b></span><input className="input-field" name="occurrenceTime" type="time" required /></label></div><label className="field-group"><span>Descrição <b>*</b></span><textarea className="input-field" name="occurrenceDescription" rows={3} required /></label><label className="field-group"><span>Providência imediata <b>*</b></span><textarea className="input-field" name="occurrenceAction" rows={3} required /></label><div className="upload-placeholder">Salve o rascunho e anexe a evidência no detalhe do RDO.</div></div>}
+          {hasOccurrence && <div className="conditional-box"><p className="inline-warning"><WarningIcon />Uma ocorrência exige detalhes e evidência antes do envio para aprovação.</p><div className="form-grid three-columns"><label className="field-group"><span>Tipo <b>*</b></span><select className="input-field" name="occurrenceType" required><option value="">Selecione</option><option value="incident">Incidente</option><option value="accident">Acidente</option><option value="blockage">Bloqueio</option><option value="near_miss">Quase acidente</option><option value="other">Outro</option></select></label><label className="field-group"><span>Severidade <b>*</b></span><select className="input-field" name="occurrenceSeverity" required><option value="">Selecione</option><option value="low">Baixa</option><option value="medium">Média</option><option value="high">Alta</option><option value="critical">Crítica</option></select></label><label className="field-group"><span>Horário <b>*</b></span><input className="input-field" name="occurrenceTime" type="time" required /></label></div><label className="field-group"><span>Descrição <b>*</b></span><textarea className="input-field" name="occurrenceDescription" rows={3} required /></label><label className="field-group"><span>Providência imediata <b>*</b></span><textarea className="input-field" name="occurrenceAction" rows={3} required /></label><p className="readiness-note">As evidências enviadas na etapa 4 também ficam vinculadas a esta ocorrência ao salvar o rascunho.</p></div>}
           <hr />
           <label className="check-row"><input name="hasQuality" type="checkbox" checked={hasQuality} onChange={(event) => setHasQuality(event.target.checked)} /><span>Registrar inspeção, teste ou não conformidade</span></label>
           {hasQuality && <div className="conditional-box"><div className="form-grid two-columns"><label className="field-group"><span>Tipo <b>*</b></span><select className="input-field" name="qualityType" required><option value="">Selecione</option><option value="inspection">Inspeção</option><option value="test">Teste</option><option value="nonconformity">Não conformidade</option></select></label><label className="field-group"><span>Resultado <b>*</b></span><select className="input-field" name="qualityResult" required><option value="">Selecione</option><option value="approved">Aprovado</option><option value="rejected">Reprovado</option><option value="pending">Pendente</option><option value="not_applicable">Não aplicável</option></select></label></div><label className="field-group"><span>Descrição <b>*</b></span><textarea className="input-field" name="qualityDescription" rows={3} required /></label><label className="field-group"><span>Ação corretiva (obrigatória se reprovado)</span><textarea className="input-field" name="qualityCorrectiveAction" rows={2} /></label></div>}
@@ -245,7 +238,7 @@ export function NewRdoForm({
       <section className="form-section final-section">
         <label className="field-group"><span>Observações gerais</span><textarea className="input-field" name="generalNotes" rows={3} maxLength={4000} placeholder="Informações adicionais do dia…" /></label>
         {state?.error && <p className="form-error" role="alert">{state.error}</p>}
-        <div className="submit-row"><div><strong>O RDO será salvo como rascunho.</strong><span>A conciliação DIMEP e a aprovação acontecem antes da exportação IMUV.</span></div><SubmitButton /></div>
+        <div className="submit-row"><div><strong>O RDO será salvo como rascunho.</strong><span>A conciliação DIMEP e a aprovação acontecem antes da exportação IMUV.</span></div><SubmitButton uploading={uploadingEvidence} /></div>
       </section>
     </form>
   );

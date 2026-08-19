@@ -8,6 +8,7 @@ import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { logoutAction } from "@/app/actions/auth";
 import {
   ClipboardListIcon,
+  CalendarRangeIcon,
   Clock3Icon,
   FolderKanbanIcon,
   LayoutDashboardIcon,
@@ -23,12 +24,13 @@ const navigation = [
   { href: "/projects", label: "Projetos", icon: FolderKanbanIcon },
   { href: "/employees", label: "Colaboradores", icon: UsersIcon },
   { href: "/rdos", label: "Diário de campo", icon: ClipboardListIcon },
+  { href: "/distribution", label: "Distribuir trabalho", icon: CalendarRangeIcon },
   { href: "/hours", label: "Apontamentos", icon: Clock3Icon },
   { href: "/settings", label: "Configurações", icon: SettingsIcon },
 ];
 
-const primaryNavigation = navigation.slice(0, 5);
-const settingsItem = navigation[5];
+const primaryNavigation = navigation.slice(0, 6);
+const settingsItem = navigation[6];
 
 const COLLAPSE_KEY = "rdo:sidebar-collapsed";
 const COLLAPSE_EVENT = "rdo:sidebar-collapsed-change";

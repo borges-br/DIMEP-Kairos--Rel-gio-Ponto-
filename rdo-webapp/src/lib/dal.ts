@@ -109,7 +109,7 @@ export async function getProjectDetail(projectId: string) {
         [session.organizationId, projectId],
       ),
       client.query<{ id: string; name: string; job_title: string | null }>(
-        `select c.id, c.full_name as name, c.job_title
+        `select c.id, c.full_name as name, rdo.display_label(c.job_title) as job_title
            from rdo.project_members pm join rdo.collaborators c on c.id = pm.collaborator_id
           where pm.organization_id = $1 and pm.project_id = $2 and pm.active and c.active
           order by c.full_name`,
@@ -260,11 +260,39 @@ export async function getRdoDetail(rdoId: string) {
   });
 }
 
+export type HoursDivergenceDetail = {
+  id: string;
+  source: "rdo" | "dimep";
+  work_date: string;
+  collaborator_id: string;
+  issue_type: string;
+  explanation: string;
+  status: string;
+  original_interval: string | null;
+  declared_interval: string | null;
+  rdo_id: string | null;
+  project_label: string | null;
+  task_label: string | null;
+};
+
+export type HoursOverviewRow = {
+  work_date: string;
+  collaborator_id: string;
+  collaborator_name: string;
+  total_minutes: number;
+  allocation_count: string;
+  divergence_count: string;
+  source: "rdo" | "dimep";
+  status: string;
+  divergences: HoursDivergenceDetail[];
+};
+
 export async function getHoursOverview() {
   const session = await requireSession();
   return withTenant(session.organizationId, async (client) => {
     const result = await client.query<{
       work_date: string;
+      collaborator_id: string;
       collaborator_name: string;
       total_minutes: number;
       allocation_count: string;
@@ -282,7 +310,7 @@ export async function getHoursOverview() {
            join rdo.rdo_versions v on v.id = a.rdo_version_id
            join rdo.rdos r on r.id = v.rdo_id
            join rdo.collaborators c on c.id = a.collaborator_id
-           left join rdo.time_divergences d on d.allocation_id = a.id and d.review_status = 'pending'
+           left join rdo.time_divergences d on d.allocation_id = a.id and d.review_status <> 'accepted'
           where a.organization_id = $1 and a.allocation_status = 'active'
           group by r.work_date, c.id, c.full_name
        ), punched as (
@@ -302,18 +330,60 @@ export async function getHoursOverview() {
             )
           group by ts.work_date, ts.collaborator_id, c.id, c.full_name
        )
-       select work_date::text, collaborator_name, total_minutes, allocation_count,
+       select work_date::text, collaborator_id, collaborator_name, total_minutes, allocation_count,
               divergence_count, source, status
          from (select * from allocated union all select * from punched) overview
         order by work_date desc, collaborator_name
         limit 100`,
       [session.organizationId],
     );
+    const details = await client.query<HoursDivergenceDetail>(
+      `select d.id, 'rdo'::text as source, r.work_date::text, a.collaborator_id,
+              d.divergence_type as issue_type, d.justification as explanation,
+              d.review_status as status,
+              case when a.original_start_at is null or a.original_end_at is null then null
+                   else to_char(a.original_start_at at time zone o.timezone, 'HH24:MI') || '–' || to_char(a.original_end_at at time zone o.timezone, 'HH24:MI') end as original_interval,
+              to_char(a.declared_start_at at time zone o.timezone, 'HH24:MI') || '–' || to_char(a.declared_end_at at time zone o.timezone, 'HH24:MI') as declared_interval,
+              r.id as rdo_id, p.code || ' · ' || p.name as project_label,
+              t.code || ' · ' || t.name as task_label
+         from rdo.time_divergences d
+         join rdo.work_allocations a on a.id = d.allocation_id
+         join rdo.rdo_versions v on v.id = a.rdo_version_id
+         join rdo.rdos r on r.id = v.rdo_id
+         join rdo.projects p on p.id = r.project_id
+         join rdo.rdo_activity_groups g on g.id = a.activity_group_id
+         join rdo.tasks t on t.id = g.task_id
+         join rdo.organizations o on o.id = d.organization_id
+        where d.organization_id = $1 and d.review_status <> 'accepted'
+          and a.allocation_status = 'active'
+       union all
+       select di.id, 'dimep'::text as source, di.work_date::text, di.collaborator_id,
+              di.issue_type, coalesce(nullif(di.details->>'message',''), nullif(di.details->>'reason',''),
+                case di.issue_type
+                  when 'missing_end' then 'Existe uma entrada sem a batida de saída correspondente.'
+                  when 'duplicate_time' then 'Foram recebidas batidas repetidas no mesmo horário.'
+                  when 'cross_midnight' then 'A jornada atravessa a meia-noite e precisa de conferência.'
+                  when 'invalid_punch' then 'A batida recebida possui data ou horário inválido.'
+                  else 'A sincronização DIMEP identificou uma inconsistência que exige revisão.' end) as explanation,
+              di.resolution_status as status, null as original_interval, null as declared_interval,
+              null::uuid as rdo_id, null::text as project_label, null::text as task_label
+         from rdo.dimep_sync_issues di
+        where di.organization_id = $1 and di.collaborator_id is not null
+          and di.work_date is not null and di.resolution_status = 'open'
+        order by work_date desc, collaborator_id
+        limit 400`,
+      [session.organizationId],
+    );
     const exportable = await client.query<{ count: string }>(
       "select count(*)::text from rdo.v_imuv_timer_candidates where organization_id = $1",
       [session.organizationId],
     );
-    return { session, rows: result.rows, exportableCount: Number(exportable.rows[0]?.count ?? 0) };
+    const rows: HoursOverviewRow[] = result.rows.map((row) => ({
+      ...row,
+      divergences: details.rows.filter((detail) => detail.source === row.source
+        && detail.work_date === row.work_date && detail.collaborator_id === row.collaborator_id),
+    }));
+    return { session, rows, exportableCount: Number(exportable.rows[0]?.count ?? 0) };
   });
 }
 
@@ -350,7 +420,7 @@ export type RdoFormProject = {
   tasks: { id: string; code: string; name: string; assigneeIds: string[] }[];
   locations: { id: string; label: string }[];
   members: { id: string; name: string; jobTitle: string | null }[];
-  collaborators: { id: string; name: string; jobTitle: string | null; projectMember: boolean }[];
+  collaborators: { id: string; name: string; cpfDigits: string | null; jobTitle: string | null; projectMember: boolean }[];
 };
 
 export type RdoCatalogOption = { id: string; code?: string; name: string; unit?: string };
@@ -379,7 +449,7 @@ export async function getRdoFormOptions() {
       [session.organizationId],
     );
     const members = await client.query<{ project_id: string; id: string; name: string; job_title: string | null }>(
-      `select pm.project_id, c.id, c.full_name as name, c.job_title
+      `select pm.project_id, c.id, c.full_name as name, rdo.display_label(c.job_title) as job_title
          from rdo.project_members pm join rdo.collaborators c on c.id = pm.collaborator_id
         where pm.organization_id = $1 and pm.active and c.active order by c.full_name`,
       [session.organizationId],
@@ -390,9 +460,9 @@ export async function getRdoFormOptions() {
        where ta.organization_id = $1 and ta.active and c.active`,
       [session.organizationId],
     );
-    const collaborators = await client.query<{ id: string; name: string; job_title: string | null }>(
+    const collaborators = await client.query<{ id: string; name: string; cpf_digits: string | null; job_title: string | null }>(
       `select c.id, coalesce(o.full_name_override, c.full_name) as name,
-              coalesce(o.job_title_override, c.job_title) as job_title
+              c.cpf_digits, rdo.display_label(coalesce(o.job_title_override, c.job_title)) as job_title
          from rdo.collaborators c
          left join rdo.collaborator_profile_overrides o on o.collaborator_id = c.id
         where c.organization_id = $1 and coalesce(o.active_override, c.active)
@@ -415,8 +485,8 @@ export async function getRdoFormOptions() {
       })),
       locations: locations.rows.filter((location) => location.project_id === project.id).map(({ id, label }) => ({ id, label })),
       members: members.rows.filter((member) => member.project_id === project.id).map(({ id, name, job_title }) => ({ id, name, jobTitle: job_title })),
-      collaborators: collaborators.rows.map(({ id, name, job_title }) => ({
-        id, name, jobTitle: job_title,
+      collaborators: collaborators.rows.map(({ id, name, cpf_digits, job_title }) => ({
+        id, name, cpfDigits: cpf_digits, jobTitle: job_title,
         projectMember: members.rows.some((member) => member.project_id === project.id && member.id === id),
       })),
     }));
@@ -427,6 +497,68 @@ export async function getRdoFormOptions() {
       equipment: equipment.rows.map((item) => ({ id: item.id, code: item.asset_code, name: item.name })),
     };
   });
+}
+
+export type WorkAssignmentRow = {
+  id: string;
+  work_date: string;
+  planned_start: string;
+  planned_end: string;
+  instructions: string | null;
+  status: string;
+  project_label: string;
+  task_label: string;
+  collaborator_name: string;
+  imuv_linked: boolean;
+  dimep_status: "awaiting" | "covered" | "divergent" | "no_punches";
+};
+
+export async function getWorkDistributionData() {
+  const options = await getRdoFormOptions();
+  const { session } = options;
+  const allProjects = canSeeAllProjects(session.roles);
+  const assignments = await withTenant(session.organizationId, async (client) => client.query<WorkAssignmentRow>(
+    `select wa.id, wa.work_date::text, to_char(wa.planned_start,'HH24:MI') as planned_start,
+            to_char(wa.planned_end,'HH24:MI') as planned_end, wa.instructions, wa.status,
+            p.code || ' · ' || p.name as project_label,
+            t.code || ' · ' || t.name as task_label, c.full_name as collaborator_name,
+            (t.imuv_external_id is not null and exists (
+              select 1 from rdo.collaborator_external_refs er
+              join rdo.integration_connections ic on ic.id = er.connection_id
+              where er.organization_id = wa.organization_id and er.collaborator_id = wa.collaborator_id
+                and ic.provider = 'imuv'
+            )) as imuv_linked,
+            case
+              when exists (
+                select 1 from rdo.time_segments ts join rdo.organizations o on o.id = wa.organization_id
+                 where ts.organization_id = wa.organization_id and ts.collaborator_id = wa.collaborator_id
+                   and ts.work_date = wa.work_date and ts.segment_status = 'closed'
+                   and ts.original_start_at <= ((wa.work_date + wa.planned_start) at time zone o.timezone)
+                   and ts.original_end_at >= ((wa.work_date + wa.planned_end) at time zone o.timezone)
+              ) then 'covered'
+              when exists (
+                select 1 from rdo.dimep_sync_issues di where di.organization_id = wa.organization_id
+                  and di.collaborator_id = wa.collaborator_id and di.work_date = wa.work_date
+                  and di.resolution_status = 'open'
+              ) then 'divergent'
+              when wa.work_date >= current_date then 'awaiting'
+              else 'no_punches'
+            end as dimep_status
+       from rdo.work_assignments wa
+       join rdo.projects p on p.id = wa.project_id
+       join rdo.tasks t on t.id = wa.task_id
+       join rdo.collaborators c on c.id = wa.collaborator_id
+      where wa.organization_id = $1
+        and ($2::boolean or exists (
+          select 1 from rdo.leader_team_members ltm where ltm.project_id = wa.project_id
+            and ltm.leader_user_id = $3 and ltm.valid_from <= wa.work_date
+            and (ltm.valid_until is null or ltm.valid_until >= wa.work_date)
+        ))
+      order by wa.work_date desc, wa.planned_start desc
+      limit 100`,
+    [session.organizationId, allProjects, session.userId],
+  ));
+  return { ...options, assignments: assignments.rows };
 }
 
 export async function getEmployees(search = "") {
@@ -440,8 +572,8 @@ export async function getEmployees(search = "") {
     }>(
       `select c.id, coalesce(o.full_name_override, c.full_name) as name, c.cpf_digits,
               coalesce(o.employee_number_override, c.employee_number) as employee_number,
-              coalesce(o.job_title_override, c.job_title) as job_title,
-              coalesce(o.department_override, c.department) as department,
+              rdo.display_label(coalesce(o.job_title_override, c.job_title)) as job_title,
+              rdo.display_label(coalesce(o.department_override, c.department)) as department,
               case when coalesce(o.active_override,c.active) then
                 case when c.employment_status='inactive' and o.active_override is true then 'active' else c.employment_status end
               else 'inactive' end as employment_status,
@@ -488,8 +620,10 @@ export async function getEmployeeDetail(collaboratorId: string) {
       `select c.id, c.full_name as source_name, coalesce(o.full_name_override, c.full_name) as name,
               c.cpf_digits, c.cpf_is_valid, c.employee_number as source_employee_number,
               coalesce(o.employee_number_override, c.employee_number) as employee_number,
-              c.job_title as source_job_title, coalesce(o.job_title_override, c.job_title) as job_title,
-              c.department as source_department, coalesce(o.department_override, c.department) as department,
+              rdo.display_label(c.job_title) as source_job_title,
+              rdo.display_label(coalesce(o.job_title_override, c.job_title)) as job_title,
+              rdo.display_label(c.department) as source_department,
+              rdo.display_label(coalesce(o.department_override, c.department)) as department,
               c.email as source_email, coalesce(o.email_override,c.email) as email,
               c.phone as source_phone, coalesce(o.phone_override,c.phone) as phone,
               c.active as source_active, coalesce(o.active_override,c.active) as active,

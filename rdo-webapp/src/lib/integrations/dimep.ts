@@ -27,7 +27,21 @@ export type DimepPreview = DimepEmployeePreview | DimepPunchPreview;
 export type DimepEmployeeConfirmation = { externalId: string; candidateId: string };
 
 const isObject = (value: unknown): value is Obj => Boolean(value) && typeof value === "object" && !Array.isArray(value);
-const text = (value: unknown) => value === null || value === undefined ? null : String(value).trim() || null;
+const text = (input: unknown): string | null => {
+  if (input === null || input === undefined || Array.isArray(input)) return null;
+  if (isObject(input)) {
+    for (const key of ["Descricao", "Description", "Nome", "Name", "Titulo", "Title", "Label", "Codigo", "Code"]) {
+      const nested = input[key];
+      if (nested !== null && nested !== undefined && typeof nested !== "object") {
+        const result = String(nested).trim();
+        if (result) return result;
+      }
+    }
+    return null;
+  }
+  const result = String(input).trim();
+  return result && result !== "[object Object]" ? result : null;
+};
 const digits = (value: unknown) => text(value)?.replace(/\D/g, "") || null;
 const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 const normalized = (value: string) => value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase().replace(/[^A-Z0-9]+/g, " ").trim();
