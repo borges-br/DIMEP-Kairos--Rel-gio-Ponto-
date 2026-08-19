@@ -77,7 +77,7 @@ async function pages(path: string, extras: Record<string, string> = {}) {
 export async function fetchImuvData(): Promise<ImuvData> {
   const [people, collaborators, projects, tasks] = await Promise.all([
     pages(resource("PEOPLE")), pages(resource("COLLABORATORS")),
-    pages(resource("PROJECTS"), { expand: "members" }), pages(resource("TASKS"), { expand: "taskCollaborators" }),
+    pages(resource("PROJECTS"), { expand: "projectCollaborators,people" }), pages(resource("TASKS"), { expand: "taskCollaborators" }),
   ]);
   return { people, collaborators, projects, tasks };
 }
@@ -105,8 +105,23 @@ async function localData(client: PoolClient, organizationId: string) {
     client.query("select imuv_external_id,code,name,starts_on,active from rdo.projects where organization_id=$1", [organizationId]),
     client.query("select imuv_external_id,code,name,description,active from rdo.tasks where organization_id=$1", [organizationId]),
   ]);
+  // Vinculos ativos de origem imuv, agrupados por projeto, para a previa poder
+  // mostrar quem entra e quem sai da equipe antes de gravar.
+  const members = await client.query<{ imuv_external_id: string; full_name: string }>(
+    `select p.imuv_external_id, c.full_name
+       from rdo.project_members pm
+       join rdo.projects p on p.id = pm.project_id
+       join rdo.collaborators c on c.id = pm.collaborator_id
+      where pm.organization_id = $1 and pm.active and pm.source = 'imuv'
+        and p.imuv_external_id is not null`, [organizationId]);
+  const projectMembers = new Map<string, string[]>();
+  for (const row of members.rows) {
+    const list = projectMembers.get(row.imuv_external_id) ?? [];
+    list.push(row.full_name); projectMembers.set(row.imuv_external_id, list);
+  }
+
   const map = (rows: Obj[], key: string) => new Map(rows.map((row) => [String(row[key]), row]));
-  return { clients: map(clients.rows as Obj[], "imuv_external_id"), collaborators: map(collaborators.rows as Obj[], "external_id"), projects: map(projects.rows as Obj[], "imuv_external_id"), tasks: map(tasks.rows as Obj[], "imuv_external_id") };
+  return { clients: map(clients.rows as Obj[], "imuv_external_id"), collaborators: map(collaborators.rows as Obj[], "external_id"), projects: map(projects.rows as Obj[], "imuv_external_id"), tasks: map(tasks.rows as Obj[], "imuv_external_id"), projectMembers };
 }
 
 const taskProject = (row: Obj) => asText(row.related_id ?? row.project_id ?? row.id_project);
@@ -117,7 +132,7 @@ export async function previewImuv(client: PoolClient, organizationId: string, di
   if (direction === "pull") {
     for (const row of data.people) {
       const id = asText(row.id); if (!id) continue;
-      const old = local.clients.get(id); const name = asText(row.company_name) || asText(row.name) || `Cliente ${id}`;
+      const old = local.clients.get(id); const name = asText(row.name) || asText(row.company_name) || `Cliente ${id}`;
       const rawDocument = asDigits(row.cpf_cnpj); const document = rawDocument?.length === 11 || rawDocument?.length === 14 ? rawDocument : null;
       const fields = fieldDiffs([["Nome do cliente", old?.legal_name, name], ["CPF/CNPJ", old?.document_digits, document], ["Ativo", old?.active, active(row.active)]]);
       if (!old || fields.length) items.push({ entity: "client", externalId: id, label: name, action: old ? "update" : "create", fields });
@@ -132,11 +147,27 @@ export async function previewImuv(client: PoolClient, organizationId: string, di
       if (!old || fields.length) items.push({ entity: "collaborator", externalId: id, label: name, action: old ? "update" : "create", fields });
     }
     const projectIds = new Set(data.projects.map((row) => asText(row.id)).filter(Boolean));
+    // Nome do colaborador por id do IMUV, para a previa listar pessoas e nao ids.
+    const remoteCollaborators = new Map(data.collaborators.flatMap((row) => {
+      const id = asText(row.id); const name = asText(row.name);
+      return id ? [[id, name || `Colaborador ${id}`] as [string, string]] : [];
+    }));
+    const teamLabel = (names: string[]) => names.length ? [...names].sort().join(", ") : "Sem colaboradores";
     for (const row of data.projects) {
       const id = asText(row.id); if (!id) continue;
       const old = local.projects.get(id); const name = asText(row.name) || `Projeto ${id}`; const code = asText(row.code) || id;
-      const fields = fieldDiffs([["Código", old?.code, code], ["Nome", old?.name, name], ["Data inicial", date(old?.starts_on), date(row.start_date)], ["Ativo", old?.active, active(row.active)]]);
-      if (!old || fields.length) items.push({ entity: "project", externalId: id, label: `${code} · ${name}`, action: old ? "update" : "create", fields });
+      // Ids que a aplicacao nao conseguira resolver nao entram na previa como
+      // vinculo futuro: o laco de gravacao tambem os descarta. Contamos a parte
+      // para nao dar a impressao de que a equipe ficara menor sem explicacao.
+      const incomingIds = projectMemberIds(row);
+      const incomingNames = incomingIds.flatMap((memberId) => {
+        const found = remoteCollaborators.get(memberId); return found ? [found] : [];
+      });
+      const unresolved = incomingIds.length - incomingNames.length;
+      const fields = fieldDiffs([["Código", old?.code, code], ["Nome", old?.name, name], ["Data inicial", date(old?.starts_on), date(row.start_date)], ["Ativo", old?.active, active(row.active)],
+        ["Colaboradores", old ? teamLabel(local.projectMembers.get(id) ?? []) : null, teamLabel(incomingNames)]]);
+      const note = unresolved ? `${unresolved} vínculo(s) ignorado(s): colaborador não encontrado no IMUV.` : undefined;
+      if (!old || fields.length) items.push({ entity: "project", externalId: id, label: `${code} · ${name}`, action: old ? "update" : "create", fields, note });
     }
     for (const row of data.tasks) {
       const id = asText(row.id); if (!id) continue;
@@ -183,6 +214,47 @@ async function saveSnapshot(client: PoolClient, organizationId: string, connecti
     [organizationId, connectionId, runId, type, id, asText(row.updated_at), JSON.stringify(row), hash(row)]);
 }
 
+/**
+ * Vinculos projeto-colaborador vindos de `expand=projectCollaborators`. A linha
+ * e um pivo: `id` e o identificador do proprio vinculo (144, 145...), NAO do
+ * colaborador, entao `collaborator_id` tem que vir primeiro na precedencia.
+ * `members` fica aceito como forma alternativa por compatibilidade.
+ */
+function projectMemberIds(row: Obj): string[] {
+  const raw = Array.isArray(row.projectCollaborators) ? row.projectCollaborators
+    : Array.isArray(row.members) ? row.members : [];
+  const ids: string[] = [];
+  for (const entry of raw) {
+    if (!isObject(entry)) { const plain = asText(entry); if (plain) ids.push(plain); continue; }
+    // Vinculo desativado no IMUV nao entra: o laco abaixo ja zerou os locais.
+    if (entry.active !== undefined && !active(entry.active)) continue;
+    const nested = isObject(entry.collaborator) ? entry.collaborator : null;
+    const id = asText(entry.collaborator_id) || asText(nested?.id) || asText(entry.id);
+    if (id) ids.push(id);
+  }
+  return ids;
+}
+
+/**
+ * Nome fantasia (`name`) na frente da razao social (`company_name`): e mais curto
+ * no card e distingue unidades do mesmo grupo ("BRIDGESTONE CAMPINAS - BANDAS"
+ * contra "BRIDGESTONE DO BRASIL INDUSTRIA E COMERCIO LTDA."). A mesma ordem vale
+ * no preview e no laco de pessoas, para o mesmo cliente nao receber dois nomes.
+ *
+ * Cliente embutido no projeto via `expand=people`. Serve de rede de seguranca
+ * quando o /people paginado nao trouxe a pessoa (ela esta inativa, por exemplo)
+ * e o projeto ficaria com o rotulo sintetico "Cliente IMUV {id}".
+ */
+function embeddedClient(row: Obj) {
+  const people = isObject(row.people) ? row.people : null;
+  if (!people) return null;
+  const name = asText(people.name) || asText(people.company_name);
+  if (!name) return null;
+  const digits = asDigits(people.cpf_cnpj);
+  const document = digits?.length === 11 || digits?.length === 14 ? digits : null;
+  return { name, document, documentRaw: asText(people.cpf_cnpj), updatedAt: asText(people.updated_at) };
+}
+
 export async function applyImuvPull(client: PoolClient, organizationId: string, userId: string, data: ImuvData, preview: ImuvPreview) {
   await client.query("select pg_advisory_xact_lock(hashtext($1),hashtext('imuv-sync'))", [organizationId]);
   const connectionId = await getConnection(client, organizationId);
@@ -192,7 +264,7 @@ export async function applyImuvPull(client: PoolClient, organizationId: string, 
   const runId = runResult.rows[0].id; let written = 0; const rejected = preview.counts.skip;
   const clientIds = new Map<string, string>();
   for (const row of data.people) {
-    const id = asText(row.id); if (!id) continue; const name = asText(row.company_name) || asText(row.name) || `Cliente ${id}`; const rawDocument = asDigits(row.cpf_cnpj); const document = rawDocument?.length === 11 || rawDocument?.length === 14 ? rawDocument : null;
+    const id = asText(row.id); if (!id) continue; const name = asText(row.name) || asText(row.company_name) || `Cliente ${id}`; const rawDocument = asDigits(row.cpf_cnpj); const document = rawDocument?.length === 11 || rawDocument?.length === 14 ? rawDocument : null;
     const saved = await client.query<{ id: string }>(`insert into rdo.clients
       (organization_id,imuv_external_id,legal_name,normalized_name,document_raw,document_digits,document_type,document_is_valid,active,source_updated_at)
       values ($1,$2,$3,$4,$5,$6,$7,false,$8,$9) on conflict (organization_id,imuv_external_id) do update set
@@ -216,12 +288,16 @@ export async function applyImuvPull(client: PoolClient, organizationId: string, 
     collaboratorIds.set(id,collaboratorId);written+=1;await saveSnapshot(client,organizationId,connectionId,runId,"collaborator",row);
   }
   const projectIds=new Map<string,string>();
-  for(const row of data.projects){const id=asText(row.id);if(!id)continue;const peopleId=asText(row.people_id)||`project:${id}`;let clientId=clientIds.get(peopleId);if(!clientId){const fallbackName=asText(row.client_name)||`Cliente IMUV ${peopleId}`;const fallback=await client.query<{id:string}>(`insert into rdo.clients (organization_id,imuv_external_id,legal_name,normalized_name,document_type,document_is_valid,active) values ($1,$2,$3,$4,'unknown',false,true) on conflict (organization_id,imuv_external_id) do update set active=true returning id`,[organizationId,peopleId,fallbackName,normalized(fallbackName)]);clientId=fallback.rows[0].id;clientIds.set(peopleId,clientId);}const name=asText(row.name)||`Projeto ${id}`;const code=asText(row.code)||id;const completed=Boolean(date(row.date_finished));
+  for(const row of data.projects){const id=asText(row.id);if(!id)continue;const peopleId=asText(row.people_id)||`project:${id}`;let clientId=clientIds.get(peopleId);if(!clientId){const embedded=embeddedClient(row);const fallbackName=embedded?.name||`Cliente IMUV ${peopleId}`;const documentType=embedded?.document?.length===14?"cnpj":embedded?.document?.length===11?"cpf":"unknown";
+    // Com nome real vindo do expand, corrige tambem os registros que ficaram
+    // gravados com o rotulo sintetico. Sem nome real, nunca sobrescreve o que
+    // ja esta no banco: um rotulo sintetico nao pode apagar um nome bom.
+    const fallback=await client.query<{id:string}>(`insert into rdo.clients (organization_id,imuv_external_id,legal_name,normalized_name,document_raw,document_digits,document_type,document_is_valid,active,source_updated_at) values ($1,$2,$3,$4,$5,$6,$7,false,true,$8) on conflict (organization_id,imuv_external_id) do update set active=true${embedded?",legal_name=excluded.legal_name,normalized_name=excluded.normalized_name,document_raw=excluded.document_raw,document_digits=excluded.document_digits,document_type=excluded.document_type,source_updated_at=excluded.source_updated_at":""} returning id`,[organizationId,peopleId,fallbackName,normalized(fallbackName),embedded?.documentRaw??null,embedded?.document??null,documentType,embedded?.updatedAt??null]);clientId=fallback.rows[0].id;clientIds.set(peopleId,clientId);}const name=asText(row.name)||`Projeto ${id}`;const code=asText(row.code)||id;const completed=Boolean(date(row.date_finished));
     const saved=await client.query<{id:string}>(`insert into rdo.projects (organization_id,client_id,imuv_external_id,code,name,normalized_name,status_raw,status_normalized,starts_on,ends_on,address_line,active,source_updated_at)
       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) on conflict (organization_id,imuv_external_id) do update set client_id=excluded.client_id,code=excluded.code,name=excluded.name,normalized_name=excluded.normalized_name,status_raw=excluded.status_raw,status_normalized=excluded.status_normalized,starts_on=excluded.starts_on,ends_on=excluded.ends_on,address_line=excluded.address_line,active=excluded.active,source_updated_at=excluded.source_updated_at returning id`,[organizationId,clientId,id,code,name,normalized(name),asText(row.status),completed?"completed":active(row.active)?"active":"cancelled",date(row.start_date),date(row.deadline),asText(row.address),active(row.active),asText(row.updated_at)]);
     projectIds.set(id,saved.rows[0].id);written+=1;await saveSnapshot(client,organizationId,connectionId,runId,"project",row);
     await client.query("update rdo.project_members set active=false where organization_id=$1 and project_id=$2 and source='imuv'",[organizationId,saved.rows[0].id]);
-    const members=Array.isArray(row.members)?row.members:[];for(const member of members){const memberId=isObject(member)?asText(member.id??member.collaborator_id):asText(member);const collaboratorId=memberId?collaboratorIds.get(memberId):null;if(collaboratorId)await client.query(`insert into rdo.project_members (organization_id,project_id,collaborator_id,source,active,source_updated_at) values ($1,$2,$3,'imuv',true,$4) on conflict (project_id,collaborator_id) do update set active=true,source_updated_at=excluded.source_updated_at`,[organizationId,saved.rows[0].id,collaboratorId,asText(row.updated_at)]);}
+    for(const memberId of projectMemberIds(row)){const collaboratorId=collaboratorIds.get(memberId);if(collaboratorId)await client.query(`insert into rdo.project_members (organization_id,project_id,collaborator_id,source,active,source_updated_at) values ($1,$2,$3,'imuv',true,$4) on conflict (project_id,collaborator_id) do update set active=true,source_updated_at=excluded.source_updated_at`,[organizationId,saved.rows[0].id,collaboratorId,asText(row.updated_at)]);}
     await client.query(`insert into rdo.work_locations (organization_id,project_id,location_type,label,normalized_label,active) values ($1,$2,'front','Local principal','LOCAL PRINCIPAL',true) on conflict (project_id,normalized_label) do update set active=true`,[organizationId,saved.rows[0].id]);
   }
   for(const row of data.tasks){const id=asText(row.id);if(!id)continue;const projectId=projectIds.get(taskProject(row)||"");if(!projectId)continue;const name=asText(row.name)||`Tarefa ${id}`;const code=asText(row.code)||id;const completed=Boolean(date(row.date_finished));
