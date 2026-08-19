@@ -1,32 +1,24 @@
 "use client";
 
-import { useActionState, useMemo, useState } from "react";
-import { useFormStatus } from "react-dom";
+import { useActionState, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { flushSync, useFormStatus } from "react-dom";
 import { createRdoAction } from "@/app/actions/rdo";
 import type { RdoCatalogOption, RdoFormProject } from "@/lib/dal";
 import { CloudIcon, CloseIcon, PlusIcon, RainIcon, ShieldIcon, SunIcon, UsersIcon, WarningIcon, WindIcon } from "@/components/icons";
 import { CollaboratorPicker } from "@/components/collaborator-picker";
 import { EvidenceUploader } from "@/components/evidence-uploader";
+import {
+  clearDraft, draftSnapshot, draftTimeLabel, isDraftMeaningful, serverDraftSnapshot, subscribeToDraft, writeDraft,
+  type ActivityDraft, type DraftEvidence, type EquipmentDraft, type MaterialDraft, type RdoDraft,
+} from "@/lib/rdo-draft";
 
-type ActivityDraft = {
-  key: string;
-  taskId: string;
-  locationId: string;
-  startTime: string;
-  endTime: string;
-  description: string;
-  collaboratorIds: string[];
-  quantity: string;
-  unit: string;
-  progress: string;
-  divergenceReason: string;
-  ptNumber: string;
-  ptOpenTime: string;
-  ptCloseTime: string;
-};
-
-type MaterialDraft = { key: string; materialId: string; movement: "" | "used" | "received" | "missing"; quantity: string; unit: string };
-type EquipmentDraft = { key: string; equipmentId: string; usageMinutes: string; downtimeMinutes: string; downtimeReason: string };
+/** Campos não controlados que o rascunho local precisa reter. */
+const draftFieldNames = [
+  "workDate", "generalNotes", "safetyDetails", "correctiveAction", "temperatureC",
+  "weatherImpactDescription", "pendingItem", "nextStep", "evidenceCaption",
+  "occurrenceType", "occurrenceSeverity", "occurrenceTime", "occurrenceDescription", "occurrenceAction",
+  "qualityType", "qualityResult", "qualityDescription", "qualityCorrectiveAction",
+];
 
 const emptyActivity = (key: string, project?: RdoFormProject, requestedTaskId = ""): ActivityDraft => {
   const task = project?.tasks.find((item) => item.id === requestedTaskId) || project?.tasks[0];
@@ -83,6 +75,17 @@ export function NewRdoForm({
   const [materialRows, setMaterialRows] = useState<MaterialDraft[]>([]);
   const [equipmentRows, setEquipmentRows] = useState<EquipmentDraft[]>([]);
   const [uploadingEvidence, setUploadingEvidence] = useState(false);
+  const [evidence, setEvidence] = useState<DraftEvidence[]>([]);
+  const [restoredEvidence, setRestoredEvidence] = useState<DraftEvidence[]>();
+  const [draftHandled, setDraftHandled] = useState(false);
+  const [dirtyTick, setDirtyTick] = useState(0);
+  const [mountedAt] = useState(() => new Date().toISOString());
+  const storedDraft = useSyncExternalStore(subscribeToDraft, draftSnapshot, serverDraftSnapshot);
+  // Só um rascunho anterior a esta tela é candidato a recuperação; o que este
+  // formulário grava a cada digitação nunca vira aviso para o próprio usuário.
+  const recoverable = !draftHandled && storedDraft && storedDraft.savedAt < mountedAt
+    && isDraftMeaningful(storedDraft) ? storedDraft : null;
+  const formRef = useRef<HTMLFormElement>(null);
   const project = projects.find((item) => item.id === projectId);
 
   const serializedActivities = useMemo(() => JSON.stringify(activities.map((item) => ({
@@ -113,6 +116,62 @@ export function NewRdoForm({
     downtimeReason: item.downtimeReason,
   }))), [equipmentRows]);
 
+  // Um RDO longo preenchido em campo não pode se perder com a aba fechada ou a
+  // bateria acabando: o conteúdo fica no navegador até o rascunho ser salvo.
+  const persist = useCallback(() => {
+    const form = formRef.current;
+    if (!form) return;
+    const data = new FormData(form);
+    const fields = Object.fromEntries(draftFieldNames
+      .map((name) => [name, String(data.get(name) ?? "")])
+      .filter(([, value]) => value)) as Record<string, string>;
+    writeDraft({
+      projectId, activities, materials: materialRows, equipment: equipmentRows,
+      toggles: { dds, ppe, unsafe, weatherImpacted, hasOccurrence, hasQuality },
+      weatherCondition, evidence, fields,
+    });
+  }, [projectId, activities, materialRows, equipmentRows, dds, ppe, unsafe, weatherImpacted,
+    hasOccurrence, hasQuality, weatherCondition, evidence]);
+
+  useEffect(() => {
+    if (recoverable) return;
+    const timer = window.setTimeout(persist, 800);
+    return () => window.clearTimeout(timer);
+  }, [persist, recoverable, dirtyTick]);
+
+  function recoverDraft(draft: RdoDraft) {
+    // flushSync porque os campos não controlados das seções condicionais só
+    // existem no DOM depois que os estados que as abrem forem aplicados.
+    flushSync(() => {
+      setProjectId(draft.projectId);
+      setActivities(draft.activities);
+      setMaterialRows(draft.materials);
+      setEquipmentRows(draft.equipment);
+      setWeatherCondition(draft.weatherCondition);
+      setDds(draft.toggles.dds ?? true);
+      setPpe(draft.toggles.ppe ?? true);
+      setUnsafe(Boolean(draft.toggles.unsafe));
+      setWeatherImpacted(Boolean(draft.toggles.weatherImpacted));
+      setHasOccurrence(Boolean(draft.toggles.hasOccurrence));
+      setHasQuality(Boolean(draft.toggles.hasQuality));
+      setRestoredEvidence(draft.evidence);
+      setDraftHandled(true);
+    });
+    const form = formRef.current;
+    if (!form) return;
+    for (const [name, value] of Object.entries(draft.fields)) {
+      const field = form.elements.namedItem(name);
+      if (field instanceof HTMLInputElement || field instanceof HTMLTextAreaElement || field instanceof HTMLSelectElement) {
+        field.value = value;
+      }
+    }
+  }
+
+  function discardDraft() {
+    clearDraft();
+    setDraftHandled(true);
+  }
+
   function updateActivity(key: string, patch: Partial<ActivityDraft>) {
     setActivities((current) => current.map((item) => item.key === key ? { ...item, ...patch } : item));
   }
@@ -140,7 +199,17 @@ export function NewRdoForm({
   const today = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Sao_Paulo" }).format(new Date());
 
   return (
-    <form action={action} className="rdo-form">
+    <form action={action} className="rdo-form" ref={formRef} onChange={() => setDirtyTick((tick) => tick + 1)}>
+      {recoverable && <div className="draft-recovery" role="status">
+        <div>
+          <strong>Há um rascunho não enviado deste dispositivo.</strong>
+          <span>Salvo automaticamente em {draftTimeLabel(recoverable.savedAt)}{recoverable.evidence.length ? ` · ${recoverable.evidence.length} evidência(s) já armazenada(s)` : ""}. O salvamento automático recomeça depois da sua escolha.</span>
+        </div>
+        <div className="draft-recovery-actions">
+          <button type="button" className="button button-secondary" onClick={discardDraft}>Descartar</button>
+          <button type="button" className="button button-primary" onClick={() => recoverDraft(recoverable)}>Recuperar preenchimento</button>
+        </div>
+      </div>}
       <input type="hidden" name="activities" value={serializedActivities} />
       <input type="hidden" name="materials" value={serializedMaterials} />
       <input type="hidden" name="equipmentUsage" value={serializedEquipment} />
@@ -221,7 +290,7 @@ export function NewRdoForm({
 
       <section className="form-section evidence-section">
         <div className="section-heading"><span className="step-number">4</span><div><h2>Evidências e áudio</h2><p>Fotos e áudios serão vinculados ao projeto, tarefa, data, hora, usuário e versão do RDO.</p></div></div>
-        <EvidenceUploader onPendingChange={setUploadingEvidence} />
+        <EvidenceUploader onPendingChange={setUploadingEvidence} onItemsChange={setEvidence} restored={restoredEvidence} />
       </section>
 
       <details className="optional-section" open={hasOccurrence || hasQuality}>

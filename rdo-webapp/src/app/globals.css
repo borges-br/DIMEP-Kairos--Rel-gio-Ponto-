@@ -741,6 +741,18 @@ input[type="date"].input-field, input[type="time"].input-field { color-scheme: d
    ========================================================================== */
 
 .rdo-form { display: grid; gap: 16px; }
+.draft-recovery {
+  display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 14px 16px;
+  border: 1px solid rgba(229, 166, 59, .35); border-radius: var(--r-md); background: var(--warning-dim);
+}
+.draft-recovery > div:first-child { display: flex; min-width: 0; flex-direction: column; gap: 4px; }
+.draft-recovery strong { color: var(--warning); font-size: 13px; }
+.draft-recovery span { color: var(--text-2); font-size: 12px; }
+.draft-recovery-actions { display: flex; flex: none; gap: 10px; }
+@media (max-width: 640px) {
+  .draft-recovery { flex-direction: column; align-items: stretch; }
+  .draft-recovery-actions { justify-content: flex-end; }
+}
 .form-section, .optional-section { border: 1px solid var(--border); border-radius: var(--r-lg); background: var(--surface); }
 .form-section { padding: 24px; }
 .section-heading { display: flex; align-items: flex-start; gap: 14px; margin-bottom: 22px; }
@@ -890,6 +902,11 @@ input[type="date"].input-field, input[type="time"].input-field { color-scheme: d
 .evidence-queue li.ready { border-color: rgba(67, 180, 122, .35); }
 .evidence-queue li.failed { border-color: rgba(226, 100, 100, .35); background: var(--danger-dim); }
 .evidence-queue li > img { width: 64px; height: 64px; flex: none; border-radius: var(--r-sm); object-fit: cover; background: var(--surface-raised); }
+.evidence-thumb-placeholder {
+  display: flex; width: 64px; height: 64px; flex: none; align-items: center; justify-content: center;
+  border: 1px dashed var(--border-strong); border-radius: var(--r-sm); color: var(--text-3); background: var(--surface-raised);
+}
+.evidence-thumb-placeholder svg { width: 22px; height: 22px; }
 .evidence-queue li > audio { width: 200px; flex: none; }
 .evidence-queue li > div { display: flex; min-width: 0; flex: 1; flex-direction: column; gap: 3px; }
 .evidence-queue strong { overflow: hidden; font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
