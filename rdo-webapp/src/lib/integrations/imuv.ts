@@ -116,17 +116,42 @@ function resource(name: "PROJECTS" | "TASKS" | "PEOPLE" | "COLLABORATORS") {
   return process.env[`IMUV_${name}_PATH`]?.trim() || defaults[name];
 }
 
+/**
+ * Paginacao defensiva.
+ *
+ * A versao anterior parava quando a pagina vinha com menos de 100 linhas,
+ * presumindo que o `per-page=100` fosse obedecido. Nem todo endpoint do IMUV o
+ * respeita — /people sequer documenta `page` e `per-page` — entao a primeira
+ * pagina curta encerrava a busca e o restante do cadastro nunca chegava. Era
+ * por isso que tarefas antigas nao apareciam no projeto.
+ *
+ * Agora o tamanho de pagina e aprendido da primeira resposta, e ids repetidos
+ * denunciam um endpoint que ignora `page` e devolve sempre o mesmo bloco.
+ */
 async function pages(path: string, extras: Record<string, string> = {}) {
   const result: Obj[] = [];
-  for (let page = 1; page <= 100; page += 1) {
+  const seen = new Set<string>();
+  let pageSize = 0;
+  for (let page = 1; page <= 200; page += 1) {
     const query = new URLSearchParams({ active: "1", page: String(page), "per-page": "100", ...extras });
     const response = await externalRequest("IMUV", `${path}${path.includes("?") ? "&" : "?"}${query}`);
-    if (!Array.isArray(response)) throw new Error(`IMUV: ${path} não retornou uma lista JSON`);
+    if (!Array.isArray(response)) throw new Error(`IMUV: ${path} nao retornou uma lista JSON`);
     const rows = response.filter(isObject);
-    result.push(...rows);
-    if (rows.length < 100) return result;
+    if (!rows.length) return result;
+
+    let added = 0;
+    for (const row of rows) {
+      const key = asText(row.id) ?? JSON.stringify(row);
+      if (seen.has(key)) continue;
+      seen.add(key); result.push(row); added += 1;
+    }
+    // Nada novo: o endpoint ignora `page` e repete o mesmo bloco.
+    if (!added) return result;
+    if (page === 1) pageSize = rows.length;
+    // Pagina menor que a primeira indica fim da lista.
+    if (rows.length < pageSize) return result;
   }
-  throw new Error(`IMUV: limite de paginação excedido em ${path}`);
+  throw new Error(`IMUV: limite de paginacao excedido em ${path}`);
 }
 
 export async function fetchImuvData(): Promise<ImuvData> {
