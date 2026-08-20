@@ -46,6 +46,11 @@ const brand = {
   band: rgb(0.96, 0.97, 0.98),
   orange: rgb(0.93, 0.53, 0.05),
   deep: rgb(0.16, 0.27, 0.40),
+  // A logo da Interproject tem a palavra "iNTER" em branco: sobre papel branco
+  // ela desaparece e sobra so a marca laranja. Dai a faixa escura no cabecalho.
+  header: rgb(0.086, 0.153, 0.247),
+  onHeader: rgb(1, 1, 1),
+  onHeaderMuted: rgb(0.72, 0.78, 0.85),
 };
 
 /**
@@ -127,32 +132,41 @@ export async function GET(_request: Request, context: { params: Promise<{ id: st
     y = pageSize[1] - margin;
 
     if (withIdentity) {
-      const logoHeight = 34;
+      // Faixa sangrada de borda a borda, com um fio laranja embaixo.
+      const bandHeight = 92;
+      const bandTop = pageSize[1];
+      page.drawRectangle({
+        x: 0, y: bandTop - bandHeight, width: pageSize[0], height: bandHeight, color: brand.header,
+      });
+      page.drawRectangle({
+        x: 0, y: bandTop - bandHeight, width: pageSize[0], height: 3, color: brand.orange,
+      });
+
+      const logoHeight = 40;
+      const logoBaseline = bandTop - bandHeight / 2 - logoHeight / 2 + 2;
       if (logo) {
         const logoWidth = (logo.width / logo.height) * logoHeight;
-        page.drawImage(logo, { x: margin, y: y - logoHeight, width: logoWidth, height: logoHeight });
+        page.drawImage(logo, { x: margin, y: logoBaseline, width: logoWidth, height: logoHeight });
       } else {
-        page.drawText("INTERPROJECT", { x: margin, y: y - 22, size: 16, font: bold, color: brand.orange });
+        page.drawText("INTERPROJECT", {
+          x: margin, y: logoBaseline + 12, size: 17, font: bold, color: brand.onHeader,
+        });
       }
+
       const right = pageSize[0] - margin;
       const lines = [company.name, `CNPJ ${company.document}`, company.address, `${company.phone} · ${company.email}`];
-      let ly = y - 6;
+      let ly = bandTop - 30;
       for (const [index, text] of lines.entries()) {
         const font = index === 0 ? bold : regular;
         const size = index === 0 ? 8.5 : 7.5;
         const value = safe(text);
         page.drawText(value, {
           x: right - font.widthOfTextAtSize(value, size), y: ly, size, font,
-          color: index === 0 ? brand.deep : brand.muted,
+          color: index === 0 ? brand.onHeader : brand.onHeaderMuted,
         });
-        ly -= size + 3;
+        ly -= size + 4;
       }
-      y -= logoHeight + 12;
-      page.drawLine({
-        start: { x: margin, y }, end: { x: pageSize[0] - margin, y },
-        thickness: 1.4, color: brand.orange,
-      });
-      y -= 24;
+      y = bandTop - bandHeight - 30;
     } else {
       page.drawText(safe(`RDO ${report.rdo.project_code} · ${formatDate(report.rdo.work_date)}`), {
         x: margin, y, size: 8, font: bold, color: brand.deep,
