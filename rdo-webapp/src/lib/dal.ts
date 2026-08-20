@@ -223,11 +223,13 @@ export async function getRdoDetail(rdoId: string) {
     const header = await client.query<{
       id: string; project_id: string; project_code: string; project_name: string; client_name: string;
       work_date: string; version_id: string; version_number: number; status: string; leader_name: string;
+      leader_email: string | null; leader_phone: string | null;
       general_notes: string | null; time_reconciled_at: Date | null;
     }>(
       `select r.id, r.project_id, p.code as project_code, p.name as project_name,
               c.legal_name as client_name, r.work_date::text, v.id as version_id,
               v.version_number, v.status, u.display_name as leader_name,
+              u.email::text as leader_email, u.phone_e164 as leader_phone,
               v.general_notes, v.time_reconciled_at
          from rdo.rdos r
          join rdo.projects p on p.id = r.project_id
@@ -290,12 +292,12 @@ export async function getRdoDetail(rdoId: string) {
         [session.organizationId, rdo.version_id],
       ),
       client.query<{
-        id: string; original_filename: string; mime_type: string; size_bytes: string;
+        id: string; original_filename: string; mime_type: string; size_bytes: string; object_key: string;
         captured_at: Date | null; caption: string | null; activity_group_id: string | null;
         transcription_status: string | null; transcription_text: string | null;
       }>(
         `select distinct m.id, m.original_filename, m.mime_type, m.size_bytes::text,
-                m.captured_at, e.caption, e.activity_group_id,
+                m.object_key, m.captured_at, e.caption, e.activity_group_id,
                 mt.status as transcription_status, mt.transcription_text
            from rdo.media_files m
            join rdo.evidence_links e on e.media_file_id = m.id
