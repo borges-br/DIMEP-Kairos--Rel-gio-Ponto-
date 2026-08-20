@@ -7,6 +7,7 @@ import { PlusIcon } from "@/components/icons";
 import type { OrganizationUser } from "@/lib/dal";
 import type { AccessLevel, PageKey } from "@/lib/permissions";
 import { roleLabel } from "@/lib/format";
+import { formatPhoneBR } from "@/lib/phone";
 
 type Permission = { role: string; page_key: string; access: string };
 
@@ -57,6 +58,19 @@ function RoleChecks({ name, selected }: { name: string; selected: string[] }) {
       <span>{roleLabel(role)}</span>
     </label>)}
   </div>;
+}
+
+/** Mascara enquanto digita: o banco guarda E.164, mas ninguem digita assim. */
+function PhoneField() {
+  const [value, setValue] = useState("");
+  return <label className="field-group"><span>Telefone</span>
+    <input
+      className="input-field" name="phone" inputMode="tel" autoComplete="tel" maxLength={20}
+      placeholder="(19) 99999-8888" value={value}
+      onChange={(event) => setValue(formatPhoneBR(event.target.value))}
+    />
+    <small className="field-help">Opcional. Guardado no padrão internacional (+55).</small>
+  </label>;
 }
 
 function UserRow({ user, isSelf }: { user: OrganizationUser; isSelf: boolean }) {
@@ -120,7 +134,7 @@ export function UsersAdmin({ users, permissions, collaborators, currentUserId }:
         <div className="form-grid two-columns">
           <label className="field-group"><span>Nome completo <b>*</b></span><input className="input-field" name="displayName" minLength={3} maxLength={200} required /></label>
           <label className="field-group"><span>E-mail <b>*</b></span><input className="input-field" type="email" name="email" maxLength={320} required autoComplete="off" /></label>
-          <label className="field-group"><span>Telefone</span><input className="input-field" name="phone" placeholder="+5511999998888" /></label>
+          <PhoneField />
           <label className="field-group"><span>Colaborador vinculado</span><select className="input-field" name="collaboratorId" defaultValue=""><option value="">Sem vínculo</option>{collaborators.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select><small className="field-help">Vincular permite ligar as horas do usuário ao cadastro do ponto.</small></label>
         </div>
         <label className="field-group"><span>Senha inicial <b>*</b></span><input className="input-field" type="password" name="password" minLength={12} required autoComplete="new-password" /><small className="field-help">Mínimo de 12 caracteres. Entregue ao usuário por um canal seguro e peça a troca no primeiro acesso.</small></label>

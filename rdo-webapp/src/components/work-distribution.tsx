@@ -63,7 +63,6 @@ export function WorkDistribution({ projects, assignments }: { projects: RdoFormP
         {searchOpen && !selectedCollaborator && <div className="searchable-results">{filtered.map((item) => <button type="button" key={item.id} onClick={() => { setCollaboratorId(item.id); setSearch(item.name); setSearchOpen(false); }}><span><strong>{item.name}</strong><small>{item.jobTitle || (item.projectMember ? "Equipe do projeto" : "Cadastro de colaboradores")}</small></span>{item.projectMember && <em>Projeto</em>}</button>)}{!filtered.length && <p>Nenhum colaborador encontrado.</p>}</div>}
       </div>
       <label className="field-group"><span>Orientações</span><textarea className="input-field" name="instructions" rows={3} maxLength={2000} placeholder="Resultado esperado, local, materiais ou cuidados importantes…" /></label>
-      <div className="integration-readiness"><span><strong>IMUV</strong>Tarefa e vínculos externos preservados; envio depende de homologação do tenant.</span><span><strong>DIMEP</strong>A jornada real será comparada com este planejamento após a sincronização.</span></div>
       {state?.error && <p className="form-error" role="alert">{state.error}</p>}
       {state?.ok && <p className="readiness-note" role="status">{state.ok}</p>}
       <div className="distribution-submit"><SubmitButton /></div>

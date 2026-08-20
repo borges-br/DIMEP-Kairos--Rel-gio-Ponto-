@@ -1,11 +1,14 @@
 "use server";
 
+import { randomUUID } from "node:crypto";
+
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { requireAnyRole } from "@/lib/auth/session";
 import { hashPassword } from "@/lib/auth/password";
 import { withTenant } from "@/lib/db";
 import { pageKeys, roleOrder } from "@/lib/permissions";
+import { toE164BR } from "@/lib/phone";
 
 export type UsersState = { ok?: string; error?: string } | undefined;
 
@@ -14,10 +17,14 @@ const roles = z.enum(["leader", "foreman", "manager", "hr", "director", "admin"]
 const userSchema = z.object({
   displayName: z.string().trim().min(3, "Informe o nome completo.").max(200),
   email: z.string().trim().toLowerCase().email("E-mail inválido.").max(320),
-  // app_users guarda o telefone em E.164 e recusa qualquer outro formato.
+  // app_users guarda em E.164, mas quem digita usa o formato brasileiro: a
+  // conversao acontece aqui, e nao como exigencia na tela.
   phone: z.preprocess(
-    (value) => typeof value === "string" && value.trim() ? value.trim() : null,
-    z.string().regex(/^\+[1-9][0-9]{7,14}$/, "Telefone deve estar em formato internacional, como +5511999998888.").nullable(),
+    (value) => {
+      if (typeof value !== "string" || !value.trim()) return null;
+      return toE164BR(value) ?? "invalido";
+    },
+    z.string().regex(/^\+[1-9][0-9]{7,14}$/, "Telefone inválido. Use DDD e número, como (19) 99999-8888.").nullable(),
   ),
   password: z.string().min(12, "A senha deve ter ao menos 12 caracteres.").max(200),
   collaboratorId: z.preprocess(
@@ -26,6 +33,29 @@ const userSchema = z.object({
   ),
   roles: z.array(roles).min(1, "Selecione ao menos um perfil."),
 });
+
+/**
+ * Um unico "Não foi possível criar o usuário." escondia a causa real e obrigava
+ * a ir ao log do servidor para descobrir qualquer coisa. Os codigos do Postgres
+ * abaixo cobrem o que de fato acontece nesta tela; o resto continua generico,
+ * mas com o codigo anexado para dar rastro.
+ */
+function describeDbFailure(error: unknown, acao: string) {
+  const code = typeof error === "object" && error && "code" in error ? String(error.code) : "";
+  const constraint = typeof error === "object" && error && "constraint" in error ? String(error.constraint) : "";
+  if (code === "23505") {
+    if (constraint.includes("email")) return "Já existe um usuário com este e-mail.";
+    if (constraint.includes("auth_subject")) return "Já existe uma conta usando este e-mail como identificador.";
+    return "Já existe um registro com estes dados.";
+  }
+  if (code === "23514" && constraint.includes("phone")) {
+    return "Telefone inválido. Use DDD e número, como (19) 99999-8888.";
+  }
+  if (code === "23514") return `Os dados não passaram na validação do banco (${constraint || "restrição"}).`;
+  if (code === "42501") return "O banco recusou a escrita por política de acesso. Avise o administrador.";
+  if (code === "23503") return "Há um vínculo inválido: confira o colaborador selecionado.";
+  return `Não foi possível ${acao}${code ? ` (erro ${code})` : ""}.`;
+}
 
 export async function createUserAction(_state: UsersState, formData: FormData): Promise<UsersState> {
   const session = await requireAnyRole(["admin"]);
@@ -48,12 +78,17 @@ export async function createUserAction(_state: UsersState, formData: FormData): 
       );
       if (duplicate.rows[0]) return "email-taken";
 
-      const user = await client.query<{ id: string }>(
-        `insert into rdo.app_users (display_name, email, phone_e164, auth_subject)
-         values ($1, $2, $3, $2) returning id`,
-        [input.displayName, input.email, input.phone],
+      // O id vem da aplicacao em vez de "returning id": a policy de INSERT em
+      // app_users permite a escrita, mas RETURNING tambem exige passar pela
+      // policy de SELECT, que so aceita quem ja tem vinculo em
+      // organization_users — vinculo criado logo abaixo. A conta nunca
+      // satisfaria essa condicao no proprio insert.
+      const userId = randomUUID();
+      await client.query(
+        `insert into rdo.app_users (id, display_name, email, phone_e164, auth_subject)
+         values ($1, $2, $3, $4, $3)`,
+        [userId, input.displayName, input.email, input.phone],
       );
-      const userId = user.rows[0].id;
       await client.query(
         `insert into rdo.organization_users (organization_id, user_id, collaborator_id)
          values ($1, $2, $3)`,
@@ -83,7 +118,7 @@ export async function createUserAction(_state: UsersState, formData: FormData): 
     return { ok: `Usuário ${input.displayName} criado. Peça a troca da senha no primeiro acesso.` };
   } catch (error) {
     console.error("Falha ao criar usuário", error);
-    return { error: "Não foi possível criar o usuário." };
+    return { error: describeDbFailure(error, "criar o usuário") };
   }
 }
 

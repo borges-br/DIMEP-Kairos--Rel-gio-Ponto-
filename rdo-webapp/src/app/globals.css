@@ -1058,9 +1058,6 @@ input[type="date"].input-field, input[type="time"].input-field { color-scheme: d
 .selected-collaborator strong { font-size: 13px; }
 .selected-collaborator small { margin-top: 2px; color: var(--text-3); font-size: 11px; }
 .selected-collaborator button { border: 0; color: var(--orange-hi); background: transparent; font-size: 12px; font-weight: 700; cursor: pointer; }
-.integration-readiness { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
-.integration-readiness span { padding: 12px 14px; border: 1px solid var(--border); border-radius: var(--r-md); color: var(--text-3); background: var(--bg-subtle); font-size: 11px; line-height: 1.45; }
-.integration-readiness strong { display: block; margin-bottom: 3px; color: var(--text-2); font-size: 11px; letter-spacing: .06em; }
 .distribution-submit { display: flex; justify-content: flex-end; padding-top: 4px; }
 .distribution-list-section { margin-top: 28px; }
 .distribution-list-section .resource-heading { margin-bottom: 14px; }
@@ -1248,7 +1245,7 @@ input[type="date"].input-field, input[type="time"].input-field { color-scheme: d
   .collaborator-scroll, .divergence-list { padding-inline: 16px; }
   .collaborator-row { grid-template-columns: auto minmax(0, 1fr); }
   .collaborator-row em { display: none; }
-  .interval-comparison, .integration-readiness { grid-template-columns: 1fr; }
+  .interval-comparison { grid-template-columns: 1fr; }
   .divergence-actions { align-items: stretch; flex-direction: column-reverse; }
   .divergence-actions .button { width: 100%; }
   .distribution-form { padding: 18px; }

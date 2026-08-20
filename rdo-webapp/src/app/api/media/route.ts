@@ -3,6 +3,7 @@ import { getSession } from "@/lib/auth/session";
 import { withTenant } from "@/lib/db";
 import { evidenceMimeTypes, evidenceRejection } from "@/lib/media";
 import { objectStorageConfig, putObject } from "@/lib/object-storage";
+import { isSameOrigin } from "@/lib/request-origin";
 
 export const runtime = "nodejs";
 
@@ -12,18 +13,9 @@ function error(message: string, status: number) {
   return Response.json({ error: message }, { status });
 }
 
-function sameOrigin(request: Request) {
-  const origin = request.headers.get("origin");
-  if (!origin) return true;
-  try {
-    return new URL(origin).origin === new URL(request.url).origin;
-  } catch {
-    return false;
-  }
-}
 
 export async function POST(request: Request) {
-  if (!sameOrigin(request)) return error("Origem da requisição não permitida.", 403);
+  if (!isSameOrigin(request)) return error("Origem da requisição não permitida.", 403);
   const session = await getSession();
   if (!session) return error("Sessão expirada.", 401);
   if (!session.roles.some((role) => allowedRoles.has(role))) return error("Sem permissão para anexar mídia.", 403);
