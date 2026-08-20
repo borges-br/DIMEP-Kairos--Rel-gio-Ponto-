@@ -39,6 +39,61 @@ const asText = (input: unknown): string | null => {
   const result = String(input).trim();
   return result && result !== "[object Object]" ? result : null;
 };
+/**
+ * CPF do IMUV. O campo cpf_cnpj vem como numero JSON (a doc mostra
+ * "cpf_cnpj": 66845342962), e numero nao guarda zero a esquerda: um CPF como
+ * 07819053380 chega com 10 digitos. A regra antiga exigia 11 e devolvia null,
+ * o que zerava o CPF ja gravado. Restauramos o zero apenas quando o resultado
+ * passa no digito verificador, para nao inventar documento.
+ */
+function imuvCpf(value: unknown) {
+  const raw = asDigits(value);
+  if (!raw) return null;
+  if (raw.length === 11) return raw;
+  if (raw.length === 10) {
+    const restored = `0${raw}`;
+    if (validCpf(restored)) return restored;
+  }
+  return null;
+}
+
+const stripHtml = (value: string) => value
+  .replace(/<\s*br\s*\/?>/gi, "\n")
+  .replace(/<\/\s*(p|div|li|h[1-6])\s*>/gi, "\n")
+  .replace(/<[^>]*>/g, "")
+  .replace(/&nbsp;/gi, " ").replace(/&amp;/gi, "&").replace(/&lt;/gi, "<")
+  .replace(/&gt;/gi, ">").replace(/&quot;/gi, '"').replace(/&#0?39;/g, "'")
+  .replace(/[ \t]+/g, " ").replace(/\n{3,}/g, "\n\n").trim();
+
+/**
+ * Descricao vinda do editor do IMUV. O campo chega como JSON do EditorJS
+ * ({"time":...,"blocks":[{"data":{"text":"..."}}]}) e era gravado cru, entao a
+ * tela exibia o JSON inteiro. Extrai o texto dos blocos; se nao for esse
+ * formato, apenas limpa a marcacao HTML.
+ */
+function plainText(value: unknown): string | null {
+  const raw = asText(value);
+  if (!raw) return null;
+  let text = raw;
+  if (raw.startsWith("{") && raw.includes('"blocks"')) {
+    try {
+      const parsed = JSON.parse(raw) as { blocks?: unknown };
+      const blocks = Array.isArray(parsed.blocks) ? parsed.blocks : [];
+      const parts = blocks.flatMap((block) => {
+        const data = isObject(block) && isObject(block.data) ? block.data : null;
+        if (!data) return [];
+        const own = typeof data.text === "string" ? [data.text] : [];
+        const items = Array.isArray(data.items)
+          ? data.items.map((item) => typeof item === "string" ? item : asText(item) ?? "")
+          : [];
+        return [...own, ...items].filter(Boolean);
+      });
+      if (parts.length) text = parts.join("\n");
+    } catch { /* nao era EditorJS: segue com o texto cru */ }
+  }
+  return stripHtml(text) || null;
+}
+
 const asDigits = (value: unknown) => asText(value)?.replace(/\D/g, "") || null;
 const active = (value: unknown) => value === true || value === 1 || value === "1";
 const date = (value: unknown) => { const result = asText(value); return result && /^\d{4}-\d{2}-\d{2}/.test(result) ? result.slice(0, 10) : null; };
@@ -82,10 +137,19 @@ export async function fetchImuvData(): Promise<ImuvData> {
   return { people, collaborators, projects, tasks };
 }
 
-const fieldDiffs = (fields: Array<[string, unknown, unknown]>) => fields.flatMap(([field, oldValue, newValue]) => {
-  const current = asText(oldValue); const incoming = asText(newValue);
-  return current === incoming ? [] : [{ field, current, incoming }];
-});
+/**
+ * `preserved` lista os campos que a gravacao protege com coalesce: quando o
+ * IMUV nao manda valor, o que ja esta no banco permanece. Sem essa lista a
+ * previa anunciava "Funcao: Ajudante de Obras -> —" para uma alteracao que
+ * nunca aconteceria — previa e gravacao precisam contar a mesma historia.
+ */
+const fieldDiffs = (fields: Array<[string, unknown, unknown]>, preserved: string[] = []) =>
+  fields.flatMap(([field, oldValue, newValue]) => {
+    const current = asText(oldValue); const incoming = asText(newValue);
+    if (current === incoming) return [];
+    if (incoming === null && preserved.includes(field)) return [];
+    return [{ field, current, incoming }];
+  });
 
 async function localData(client: PoolClient, organizationId: string) {
   const [clients, collaborators, projects, tasks] = await Promise.all([
@@ -175,10 +239,11 @@ export async function previewImuv(client: PoolClient, organizationId: string, di
     for (const row of data.collaborators) {
       const id = asText(row.id); if (!id) continue;
       const old = local.collaborators.get(id); const name = asText(row.name) || `Colaborador ${id}`;
-      const rawCpf = asDigits(row.cpf_cnpj); const cpf = rawCpf?.length === 11 ? rawCpf : null;
+      const cpf = imuvCpf(row.cpf_cnpj);
       const jobTitle = asText(row.job_level ?? row.profession ?? row.job_title ?? row.function);
       const department = asText(row.department ?? row.department_name);
-      const fields = fieldDiffs([["Nome", old?.source_full_name, name], ["CPF", old?.cpf_digits, cpf], ["Função", old?.source_job_title, jobTitle], ["Departamento", old?.source_department, department], ["E-mail", old?.source_email, row.email], ["Telefone", old?.source_phone, row.phone], ["Ativo", old?.source_active, active(row.active)]]);
+      const fields = fieldDiffs([["Nome", old?.source_full_name, name], ["CPF", old?.cpf_digits, cpf], ["Função", old?.source_job_title, jobTitle], ["Departamento", old?.source_department, department], ["E-mail", old?.source_email, row.email], ["Telefone", old?.source_phone, row.phone], ["Ativo", old?.source_active, active(row.active)]],
+        ["CPF", "Função", "Departamento", "E-mail", "Telefone"]);
       if (!old || fields.length) items.push({ entity: "collaborator", externalId: id, label: name, action: old ? "update" : "create", fields });
     }
     const projectIds = new Set(data.projects.map((row) => asText(row.id)).filter(Boolean));
@@ -212,7 +277,7 @@ export async function previewImuv(client: PoolClient, organizationId: string, di
         items.push({ entity: "task", externalId: id, label: name, action: "skip", fields: [], note: "Sem vínculo de projeto reconhecido no IMUV." }); continue;
       }
       const old = local.tasks.get(id);
-      const fields = fieldDiffs([["Código", old?.code, code], ["Nome", old?.name, name], ["Descrição", old?.description, asText(row.description)], ["Ativo", old?.active, active(row.active)]]);
+      const fields = fieldDiffs([["Código", old?.code, code], ["Nome", old?.name, name], ["Descrição", old?.description, plainText(row.description)], ["Ativo", old?.active, active(row.active)]]);
       if (!old || fields.length) items.push({ entity: "task", externalId: id, label: `${code} · ${name}`, action: old ? "update" : "create", fields });
     }
   } else {
@@ -311,12 +376,14 @@ export async function applyImuvPull(client: PoolClient, organizationId: string, 
   }
   const collaboratorIds = new Map<string,string>();
   for (const row of data.collaborators) {
-    const id=asText(row.id); if(!id) continue; const name=asText(row.name)||`Colaborador ${id}`; const rawCpf=asDigits(row.cpf_cnpj); const cpf=rawCpf?.length===11?rawCpf:null; const email=asText(row.email); const phone=asText(row.phone); const jobTitle=asText(row.job_level??row.profession??row.job_title??row.function); const department=asText(row.department??row.department_name); const employeeNumber=asText(row.registration??row.employee_number??row.code);
+    const id=asText(row.id); if(!id) continue; const name=asText(row.name)||`Colaborador ${id}`; const cpf=imuvCpf(row.cpf_cnpj); const email=asText(row.email); const phone=asText(row.phone); const jobTitle=asText(row.job_level??row.profession??row.job_title??row.function); const department=asText(row.department??row.department_name); const employeeNumber=asText(row.registration??row.employee_number??row.code);
     const linked=await client.query<{id:string}>(`select c.id from rdo.collaborator_external_refs er join rdo.collaborators c on c.id=er.collaborator_id
       where er.organization_id=$1 and er.connection_id=$2 and er.external_id=$3`,[organizationId,connectionId,id]);
     let collaboratorId=linked.rows[0]?.id;
     if(!collaboratorId&&validCpf(cpf)){const same=await client.query<{id:string}>("select id from rdo.collaborators where organization_id=$1 and cpf_digits=$2 and cpf_is_valid limit 1",[organizationId,cpf]);collaboratorId=same.rows[0]?.id;}
-    if(collaboratorId) await client.query(`update rdo.collaborators set full_name=$3,normalized_name=$4,cpf_raw=$5,cpf_digits=$6,cpf_is_valid=$7,employment_status=$8,active=$9,email=$10,phone=$11,job_title=coalesce($12,job_title),department=coalesce($13,department),employee_number=coalesce($14,employee_number) where organization_id=$1 and id=$2`,[organizationId,collaboratorId,name,normalized(name),asText(row.cpf_cnpj),cpf,validCpf(cpf),active(row.active)?"active":"inactive",active(row.active),email,phone,jobTitle,department,employeeNumber]);
+    if(collaboratorId) await client.query(`update rdo.collaborators set full_name=$3,normalized_name=$4,cpf_raw=coalesce($5,cpf_raw),cpf_digits=coalesce($6,cpf_digits),
+      cpf_is_valid=case when $6::text is null then cpf_is_valid else $7 end,
+      employment_status=$8,active=$9,email=coalesce($10,email),phone=coalesce($11,phone),job_title=coalesce($12,job_title),department=coalesce($13,department),employee_number=coalesce($14,employee_number) where organization_id=$1 and id=$2`,[organizationId,collaboratorId,name,normalized(name),asText(row.cpf_cnpj),cpf,validCpf(cpf),active(row.active)?"active":"inactive",active(row.active),email,phone,jobTitle,department,employeeNumber]);
     else {const made=await client.query<{id:string}>(`insert into rdo.collaborators (organization_id,full_name,normalized_name,cpf_raw,cpf_digits,cpf_is_valid,employment_status,active,email,phone,job_title,department,employee_number)
       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) returning id`,[organizationId,name,normalized(name),asText(row.cpf_cnpj),cpf,validCpf(cpf),active(row.active)?"active":"inactive",active(row.active),email,phone,jobTitle,department,employeeNumber]);collaboratorId=made.rows[0].id;}
     await client.query(`insert into rdo.collaborator_external_refs (organization_id,collaborator_id,connection_id,external_id,external_name,external_document_raw,external_document_digits,last_seen_at)
@@ -338,7 +405,7 @@ export async function applyImuvPull(client: PoolClient, organizationId: string, 
   }
   const ownFronts=await publishedTaskIds(client,organizationId);
   for(const row of data.tasks){const id=asText(row.id);if(!id)continue;if(ownFronts.has(id))continue;const projectId=projectIds.get(taskProject(row)||"");if(!projectId)continue;const name=asText(row.name)||`Tarefa ${id}`;const code=asText(row.code)||id;const completed=Boolean(date(row.date_finished));
-    const savedTask=await client.query<{id:string}>(`insert into rdo.tasks (organization_id,project_id,imuv_external_id,code,name,normalized_name,description,status_raw,status_normalized,active,source_updated_at) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) on conflict (organization_id,imuv_external_id) do update set project_id=excluded.project_id,code=excluded.code,name=excluded.name,normalized_name=excluded.normalized_name,description=excluded.description,status_raw=excluded.status_raw,status_normalized=excluded.status_normalized,active=excluded.active,source_updated_at=excluded.source_updated_at returning id`,[organizationId,projectId,id,code,name,normalized(name),asText(row.description),asText(row.status),completed?"completed":active(row.active)?"active":"cancelled",active(row.active),asText(row.updated_at)]);
+    const savedTask=await client.query<{id:string}>(`insert into rdo.tasks (organization_id,project_id,imuv_external_id,code,name,normalized_name,description,status_raw,status_normalized,active,source_updated_at) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) on conflict (organization_id,imuv_external_id) do update set project_id=excluded.project_id,code=excluded.code,name=excluded.name,normalized_name=excluded.normalized_name,description=excluded.description,status_raw=excluded.status_raw,status_normalized=excluded.status_normalized,active=excluded.active,source_updated_at=excluded.source_updated_at returning id`,[organizationId,projectId,id,code,name,normalized(name),plainText(row.description),asText(row.status),completed?"completed":active(row.active)?"active":"cancelled",active(row.active),asText(row.updated_at)]);
     await client.query("update rdo.task_assignees set active=false where organization_id=$1 and task_id=$2 and source='imuv'",[organizationId,savedTask.rows[0].id]);
     const rawAssignees=Array.isArray(row.taskCollaborators)?row.taskCollaborators:Array.isArray(row.task_collaborators)?row.task_collaborators:Array.isArray(row.collaborators)?row.collaborators:[];
     for(const entry of rawAssignees){const nested=isObject(entry)&&isObject(entry.collaborator)?entry.collaborator:null;const externalId=isObject(entry)?asText(entry.id_collaborator??entry.collaborator_id??nested?.id??entry.id):asText(entry);const collaboratorId=externalId?collaboratorIds.get(externalId):null;if(collaboratorId)await client.query(`insert into rdo.task_assignees (organization_id,task_id,collaborator_id,source,active,source_updated_at) values ($1,$2,$3,'imuv',true,$4) on conflict (task_id,collaborator_id) do update set active=true,source_updated_at=excluded.source_updated_at`,[organizationId,savedTask.rows[0].id,collaboratorId,asText(row.updated_at)]);}
