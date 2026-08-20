@@ -77,7 +77,7 @@ async function pages(path: string, extras: Record<string, string> = {}) {
 export async function fetchImuvData(): Promise<ImuvData> {
   const [people, collaborators, projects, tasks] = await Promise.all([
     pages(resource("PEOPLE")), pages(resource("COLLABORATORS")),
-    pages(resource("PROJECTS"), { expand: "projectCollaborators,people" }), pages(resource("TASKS"), { expand: "taskCollaborators" }),
+    pages(resource("PROJECTS"), { expand: "projectCollaborators,people" }), pages(resource("TASKS"), { expand: "taskCollaborators,taskRelations" }),
   ]);
   return { people, collaborators, projects, tasks };
 }
@@ -136,7 +136,29 @@ async function publishedTaskIds(client: PoolClient, organizationId: string) {
   return new Set(result.rows.map((row) => row.imuv_task_id));
 }
 
-const taskProject = (row: Obj) => asText(row.related_id ?? row.project_id ?? row.id_project);
+/**
+ * Projeto ao qual a tarefa pertence.
+ *
+ * O GET /task nao devolve related_id nem project_id no corpo — esses nomes so
+ * existem como filtro de consulta. O vinculo real vem em `taskRelations`
+ * (expand), uma lista de relacionamentos polimorficos onde `type` e a classe do
+ * modelo e `type_id` o id do registro. Ler os campos antigos fazia
+ * taskProject() devolver null para toda tarefa, e o sync descartava todas.
+ */
+const projectModel = "app\\modules\\administrator\\models\\Project";
+
+function taskProject(row: Obj) {
+  const relations = Array.isArray(row.taskRelations) ? row.taskRelations : [];
+  for (const entry of relations) {
+    if (!isObject(entry)) continue;
+    if (entry.active !== undefined && !active(entry.active)) continue;
+    if (asText(entry.type) !== projectModel) continue;
+    const id = asText(entry.type_id);
+    if (id) return id;
+  }
+  // Formas alternativas, caso algum ambiente exponha o vinculo direto.
+  return asText(row.related_id ?? row.project_id ?? row.id_project);
+}
 
 export async function previewImuv(client: PoolClient, organizationId: string, direction: ImuvDirection, data: ImuvData): Promise<ImuvPreview> {
   const local = await localData(client, organizationId);
@@ -319,7 +341,7 @@ export async function applyImuvPull(client: PoolClient, organizationId: string, 
     const savedTask=await client.query<{id:string}>(`insert into rdo.tasks (organization_id,project_id,imuv_external_id,code,name,normalized_name,description,status_raw,status_normalized,active,source_updated_at) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) on conflict (organization_id,imuv_external_id) do update set project_id=excluded.project_id,code=excluded.code,name=excluded.name,normalized_name=excluded.normalized_name,description=excluded.description,status_raw=excluded.status_raw,status_normalized=excluded.status_normalized,active=excluded.active,source_updated_at=excluded.source_updated_at returning id`,[organizationId,projectId,id,code,name,normalized(name),asText(row.description),asText(row.status),completed?"completed":active(row.active)?"active":"cancelled",active(row.active),asText(row.updated_at)]);
     await client.query("update rdo.task_assignees set active=false where organization_id=$1 and task_id=$2 and source='imuv'",[organizationId,savedTask.rows[0].id]);
     const rawAssignees=Array.isArray(row.taskCollaborators)?row.taskCollaborators:Array.isArray(row.task_collaborators)?row.task_collaborators:Array.isArray(row.collaborators)?row.collaborators:[];
-    for(const entry of rawAssignees){const nested=isObject(entry)&&isObject(entry.collaborator)?entry.collaborator:null;const externalId=isObject(entry)?asText(entry.collaborator_id??nested?.id??entry.id):asText(entry);const collaboratorId=externalId?collaboratorIds.get(externalId):null;if(collaboratorId)await client.query(`insert into rdo.task_assignees (organization_id,task_id,collaborator_id,source,active,source_updated_at) values ($1,$2,$3,'imuv',true,$4) on conflict (task_id,collaborator_id) do update set active=true,source_updated_at=excluded.source_updated_at`,[organizationId,savedTask.rows[0].id,collaboratorId,asText(row.updated_at)]);}
+    for(const entry of rawAssignees){const nested=isObject(entry)&&isObject(entry.collaborator)?entry.collaborator:null;const externalId=isObject(entry)?asText(entry.id_collaborator??entry.collaborator_id??nested?.id??entry.id):asText(entry);const collaboratorId=externalId?collaboratorIds.get(externalId):null;if(collaboratorId)await client.query(`insert into rdo.task_assignees (organization_id,task_id,collaborator_id,source,active,source_updated_at) values ($1,$2,$3,'imuv',true,$4) on conflict (task_id,collaborator_id) do update set active=true,source_updated_at=excluded.source_updated_at`,[organizationId,savedTask.rows[0].id,collaboratorId,asText(row.updated_at)]);}
     written+=1;await saveSnapshot(client,organizationId,connectionId,runId,"task",row);}
   await client.query(`update rdo.sync_runs set status=$3,records_written=$4,records_rejected=$5,finished_at=now() where organization_id=$1 and id=$2`,[organizationId,runId,rejected?"partial":"succeeded",written,rejected]);
   await client.query("update rdo.integration_connections set last_success_at=now() where organization_id=$1 and id=$2",[organizationId,connectionId]);
