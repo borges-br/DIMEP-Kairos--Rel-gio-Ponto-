@@ -626,6 +626,28 @@ input[type="date"].input-field, input[type="time"].input-field { color-scheme: d
 .header-actions { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 10px; }
 .detail-panel { overflow: hidden; margin-bottom: 16px; }
 .read-only-panel .panel-heading { padding: 22px; }
+
+.location-list { display: grid; gap: 8px; padding: 0 22px 4px; }
+.location-row {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto auto auto; align-items: center; gap: 12px;
+  padding: 12px 14px; border: 1px solid var(--border); border-radius: var(--r-md); background: var(--bg-subtle);
+}
+.location-row.inactive { opacity: .6; }
+.location-identity { display: flex; min-width: 0; flex-direction: column; gap: 3px; }
+.location-identity strong { overflow: hidden; font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
+.location-identity small { overflow: hidden; color: var(--text-3); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.location-actions { display: flex; align-items: center; gap: 12px; }
+/* O retorno da action ocupa a linha inteira, abaixo dos controles. */
+.location-row .form-error, .location-row .readiness-note { grid-column: 1 / -1; margin: 0; }
+.location-create {
+  display: grid; grid-template-columns: minmax(0, 1fr) 180px auto; align-items: end; gap: 12px;
+  margin: 4px 22px 22px; padding-top: 16px; border-top: 1px solid var(--border);
+}
+.location-create .form-error, .location-create .readiness-note { grid-column: 1 / -1; margin: 0; }
+@media (max-width: 720px) {
+  .location-row { grid-template-columns: minmax(0, 1fr) auto; }
+  .location-create { grid-template-columns: minmax(0, 1fr); }
+}
 .activity-summary-list { border-top: 1px solid var(--border); }
 .activity-summary-list article { display: flex; gap: 14px; padding: 18px 22px; border-bottom: 1px solid var(--border); }
 .activity-summary-list article:last-child { border-bottom: 0; }

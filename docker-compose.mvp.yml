@@ -24,6 +24,7 @@ services:
       - ./database/009_sync_schedules.sql:/docker-entrypoint-initdb.d/009_sync_schedules.sql:ro
       - ./database/010_rbac_and_duplicates.sql:/docker-entrypoint-initdb.d/010_rbac_and_duplicates.sql:ro
       - ./database/011_performance_indexes.sql:/docker-entrypoint-initdb.d/011_performance_indexes.sql:ro
+      - ./database/012_work_location_publishing.sql:/docker-entrypoint-initdb.d/012_work_location_publishing.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 10s
@@ -49,6 +50,7 @@ services:
       - ./database/009_sync_schedules.sql:/migrations/009_sync_schedules.sql:ro
       - ./database/010_rbac_and_duplicates.sql:/migrations/010_rbac_and_duplicates.sql:ro
       - ./database/011_performance_indexes.sql:/migrations/011_performance_indexes.sql:ro
+      - ./database/012_work_location_publishing.sql:/migrations/012_work_location_publishing.sql:ro
     entrypoint: ["/bin/sh", "-ec"]
     command:
       - >-
@@ -62,6 +64,7 @@ services:
         -f /migrations/009_sync_schedules.sql
         -f /migrations/010_rbac_and_duplicates.sql
         -f /migrations/011_performance_indexes.sql
+        -f /migrations/012_work_location_publishing.sql
     environment:
       PGPASSWORD: ${POSTGRES_PASSWORD:?defina POSTGRES_PASSWORD}
       POSTGRES_USER: ${POSTGRES_USER:-rdo_admin}

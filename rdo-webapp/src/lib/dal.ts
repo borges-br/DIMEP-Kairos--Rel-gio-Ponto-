@@ -135,13 +135,18 @@ export async function getProjects() {
   });
 }
 
+export type WorkLocationRow = {
+  id: string; label: string; location_type: string; active: boolean;
+  imuv_task_id: string | null; published_at: Date | null; published_by: string | null;
+};
+
 export async function getProjectDetail(projectId: string) {
   const session = await requireSession();
   if (!/^[0-9a-f-]{36}$/i.test(projectId)) return null;
   const allProjects = canSeeAllProjects(session.roles);
   return withTenant(session.organizationId, async (client) => {
-    const project = await client.query<{ id: string; code: string; name: string; starts_on: string | null; client_name: string }>(
-      `select p.id, p.code, p.name, p.starts_on, c.legal_name as client_name
+    const project = await client.query<{ id: string; code: string; name: string; starts_on: string | null; client_name: string; imuv_external_id: string | null }>(
+      `select p.id, p.code, p.name, p.starts_on, c.legal_name as client_name, p.imuv_external_id
          from rdo.projects p join rdo.clients c on c.id = p.client_id
         where p.organization_id = $1 and p.id = $2 and p.active
           and ($3::boolean or exists (
@@ -153,7 +158,7 @@ export async function getProjectDetail(projectId: string) {
       [session.organizationId, projectId, allProjects, session.userId],
     );
     if (!project.rows[0]) return null;
-    const [tasks, members] = await Promise.all([
+    const [tasks, members, locations] = await Promise.all([
       client.query<{ id: string; code: string; name: string; description: string | null }>(
         `select id, code, name, description from rdo.tasks
           where organization_id = $1 and project_id = $2 and active
@@ -167,8 +172,17 @@ export async function getProjectDetail(projectId: string) {
           order by c.full_name`,
         [session.organizationId, projectId],
       ),
+      client.query<WorkLocationRow>(
+        `select l.id, l.label, l.location_type, l.active, l.imuv_task_id, l.published_at,
+                u.display_name as published_by
+           from rdo.work_locations l
+           left join rdo.app_users u on u.id = l.published_by_user_id
+          where l.organization_id = $1 and l.project_id = $2
+          order by l.active desc, l.label`,
+        [session.organizationId, projectId],
+      ),
     ]);
-    return { session, project: project.rows[0], tasks: tasks.rows, members: members.rows };
+    return { session, project: project.rows[0], tasks: tasks.rows, members: members.rows, locations: locations.rows };
   });
 }
 

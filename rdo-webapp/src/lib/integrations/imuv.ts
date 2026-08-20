@@ -124,10 +124,23 @@ async function localData(client: PoolClient, organizationId: string) {
   return { clients: map(clients.rows as Obj[], "imuv_external_id"), collaborators: map(collaborators.rows as Obj[], "external_id"), projects: map(projects.rows as Obj[], "imuv_external_id"), tasks: map(tasks.rows as Obj[], "imuv_external_id"), projectMembers };
 }
 
+/**
+ * Tarefas do IMUV que na verdade sao frentes publicadas por este app. Sem esse
+ * filtro elas voltariam pelo GET /task e apareceriam como atividade, duplicando
+ * a mesma frente em duas telas.
+ */
+async function publishedTaskIds(client: PoolClient, organizationId: string) {
+  const result = await client.query<{ imuv_task_id: string }>(
+    `select imuv_task_id from rdo.work_locations
+      where organization_id = $1 and imuv_task_id is not null`, [organizationId]);
+  return new Set(result.rows.map((row) => row.imuv_task_id));
+}
+
 const taskProject = (row: Obj) => asText(row.related_id ?? row.project_id ?? row.id_project);
 
 export async function previewImuv(client: PoolClient, organizationId: string, direction: ImuvDirection, data: ImuvData): Promise<ImuvPreview> {
   const local = await localData(client, organizationId);
+  const ownFronts = await publishedTaskIds(client, organizationId);
   const items: ImuvPreviewItem[] = [];
   if (direction === "pull") {
     for (const row of data.people) {
@@ -171,6 +184,7 @@ export async function previewImuv(client: PoolClient, organizationId: string, di
     }
     for (const row of data.tasks) {
       const id = asText(row.id); if (!id) continue;
+      if (ownFronts.has(id)) continue;
       const projectId = taskProject(row); const name = asText(row.name) || `Tarefa ${id}`; const code = asText(row.code) || id;
       if (!projectId || !projectIds.has(projectId)) {
         items.push({ entity: "task", externalId: id, label: name, action: "skip", fields: [], note: "Sem vínculo de projeto reconhecido no IMUV." }); continue;
@@ -300,7 +314,8 @@ export async function applyImuvPull(client: PoolClient, organizationId: string, 
     for(const memberId of projectMemberIds(row)){const collaboratorId=collaboratorIds.get(memberId);if(collaboratorId)await client.query(`insert into rdo.project_members (organization_id,project_id,collaborator_id,source,active,source_updated_at) values ($1,$2,$3,'imuv',true,$4) on conflict (project_id,collaborator_id) do update set active=true,source_updated_at=excluded.source_updated_at`,[organizationId,saved.rows[0].id,collaboratorId,asText(row.updated_at)]);}
     await client.query(`insert into rdo.work_locations (organization_id,project_id,location_type,label,normalized_label,active) values ($1,$2,'front','Local principal','LOCAL PRINCIPAL',true) on conflict (project_id,normalized_label) do update set active=true`,[organizationId,saved.rows[0].id]);
   }
-  for(const row of data.tasks){const id=asText(row.id);if(!id)continue;const projectId=projectIds.get(taskProject(row)||"");if(!projectId)continue;const name=asText(row.name)||`Tarefa ${id}`;const code=asText(row.code)||id;const completed=Boolean(date(row.date_finished));
+  const ownFronts=await publishedTaskIds(client,organizationId);
+  for(const row of data.tasks){const id=asText(row.id);if(!id)continue;if(ownFronts.has(id))continue;const projectId=projectIds.get(taskProject(row)||"");if(!projectId)continue;const name=asText(row.name)||`Tarefa ${id}`;const code=asText(row.code)||id;const completed=Boolean(date(row.date_finished));
     const savedTask=await client.query<{id:string}>(`insert into rdo.tasks (organization_id,project_id,imuv_external_id,code,name,normalized_name,description,status_raw,status_normalized,active,source_updated_at) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) on conflict (organization_id,imuv_external_id) do update set project_id=excluded.project_id,code=excluded.code,name=excluded.name,normalized_name=excluded.normalized_name,description=excluded.description,status_raw=excluded.status_raw,status_normalized=excluded.status_normalized,active=excluded.active,source_updated_at=excluded.source_updated_at returning id`,[organizationId,projectId,id,code,name,normalized(name),asText(row.description),asText(row.status),completed?"completed":active(row.active)?"active":"cancelled",active(row.active),asText(row.updated_at)]);
     await client.query("update rdo.task_assignees set active=false where organization_id=$1 and task_id=$2 and source='imuv'",[organizationId,savedTask.rows[0].id]);
     const rawAssignees=Array.isArray(row.taskCollaborators)?row.taskCollaborators:Array.isArray(row.task_collaborators)?row.task_collaborators:Array.isArray(row.collaborators)?row.collaborators:[];
@@ -310,6 +325,51 @@ export async function applyImuvPull(client: PoolClient, organizationId: string, 
   await client.query("update rdo.integration_connections set last_success_at=now() where organization_id=$1 and id=$2",[organizationId,connectionId]);
   await client.query(`insert into rdo.audit_events (organization_id,actor_user_id,entity_table,entity_id,action,new_data,reason) values ($1,$2,'sync_runs',$3,'insert',$4::jsonb,'Importação IMUV confirmada')`,[organizationId,userId,runId,JSON.stringify({digest:preview.digest,written,rejected})]);
   return {runId,written,rejected};
+}
+
+/**
+ * Publica uma frente no IMUV como Tarefa.
+ *
+ * O IMUV esta em producao ha tempo, entao esta funcao e deliberadamente a mais
+ * estreita possivel:
+ *
+ * - **So cria.** Um unico POST /task. Nao existe PUT nem DELETE neste modulo,
+ *   e nada aqui toca em registro que ja existia no IMUV.
+ * - **Payload minimo.** Apenas `name` e o vinculo com o projeto. Nada de status,
+ *   datas, orcamento, responsaveis ou prioridade: campo que nao e enviado e
+ *   campo que nao pode ser estragado.
+ * - **Desligada por padrao.** Sem IMUV_ALLOW_TASK_PUBLISH=true a funcao nem
+ *   chega a montar a requisicao.
+ */
+function taskPublishEnabled() {
+  return process.env.IMUV_ALLOW_TASK_PUBLISH?.trim() === "true";
+}
+
+export async function publishFrontAsImuvTask(input: { label: string; projectExternalId: string }) {
+  if (!taskPublishEnabled()) throw new Error("IMUV_PUBLISH_DISABLED");
+  // O id do projeto vai para dentro do corpo: so aceitamos o formato que o IMUV
+  // usa, para nao mandar lixo a um sistema em producao.
+  if (!/^\d+$/.test(input.projectExternalId)) throw new Error("IMUV_PROJECT_ID_INVALID");
+  const name = input.label.trim().slice(0, 200);
+  if (!name) throw new Error("IMUV_TASK_NAME_REQUIRED");
+
+  const created = await externalRequest("IMUV", resource("TASKS"), {
+    method: "POST",
+    body: {
+      name,
+      relations: [{
+        type: "app\\modules\\administrator\\models\\Project",
+        type_id: Number(input.projectExternalId),
+      }],
+    },
+  });
+
+  const taskId = isObject(created) ? asText(created.id) : null;
+  // Sem o id nao ha como o sync reconhecer a tarefa como nossa, e ela voltaria
+  // como atividade. Falhar alto e melhor do que perder o rastro: a mensagem
+  // precisa deixar claro que existe uma tarefa orfa a conferir no IMUV.
+  if (!taskId) throw new Error("IMUV_TASK_ID_MISSING");
+  return { taskId };
 }
 
 export async function applyImuvPush(client:PoolClient,organizationId:string,userId:string,preview:ImuvPreview){
