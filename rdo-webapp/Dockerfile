@@ -9,6 +9,16 @@ WORKDIR /app
 ENV NEXT_TELEMETRY_DISABLED=1
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
+# Depois dos COPY de proposito: ARG/ENV invalidam todas as camadas seguintes,
+# e BUILD_ID muda a cada commit. Aqui embaixo o node_modules continua em cache.
+#
+# BUILD_ID vira o deploymentId do Next, que protege contra skew entre o bundle
+# ja carregado no navegador e o servidor novo. Precisa ser fixado no build: a
+# config do standalone e serializada dentro de server.js.
+ARG BUILD_ID=dev
+ARG SERVER_ACTIONS_ALLOWED_ORIGINS=""
+ENV DEPLOYMENT_VERSION=$BUILD_ID \
+    SERVER_ACTIONS_ALLOWED_ORIGINS=$SERVER_ACTIONS_ALLOWED_ORIGINS
 RUN npm run build
 
 FROM node:22-alpine AS runner

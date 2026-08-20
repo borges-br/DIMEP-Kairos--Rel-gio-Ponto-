@@ -1,4 +1,7 @@
-name: rdo-interproject
+# O nome do projeto da escopo aos volumes (rdo_postgres_data, rdo_minio_data) e
+# as redes. Duas stacks com o MESMO nome montam o mesmo diretorio de dados no
+# Postgres. Toda instancia nova precisa de um STACK_NAME proprio.
+name: ${STACK_NAME:-rdo-interproject}
 
 services:
   postgres:
@@ -117,11 +120,10 @@ services:
     security_opt: [no-new-privileges:true]
 
   web:
-    build:
-      context: ./rdo-webapp
-      dockerfile: Dockerfile
-    image: rdo-interproject-web:${DEPLOYMENT_VERSION:-latest}
-    pull_policy: build
+    # Imagem publicada pelo workflow .github/workflows/build.yml. Sem `build:`,
+    # o Portainer nao precisa mais do codigo-fonte no servidor.
+    image: ${WEB_IMAGE:-ghcr.io/borges-br/rdo-webapp}:${DEPLOYMENT_VERSION:-latest}
+    pull_policy: always
     restart: unless-stopped
     depends_on:
       postgres:
@@ -182,8 +184,11 @@ services:
       rdo_internal:
       rdo_edge:
       rvproxy_npm_backend_network:
+        # E por este alias que o Nginx Proxy Manager acha o container. Duas
+        # stacks com o mesmo alias na mesma rede fazem o proxy alternar entre
+        # empresas diferentes na mesma URL.
         aliases:
-          - rdo_interproject_web
+          - ${WEB_NETWORK_ALIAS:-rdo_interproject_web}
     security_opt:
       - no-new-privileges:true
     read_only: true
@@ -191,7 +196,7 @@ services:
       - /tmp:size=64m,noexec,nosuid
 
   admin:
-    image: rdo-interproject-web:${DEPLOYMENT_VERSION:-latest}
+    image: ${WEB_IMAGE:-ghcr.io/borges-br/rdo-webapp}:${DEPLOYMENT_VERSION:-latest}
     profiles: [admin]
     depends_on:
       postgres:
@@ -216,7 +221,7 @@ services:
   # formulario for abandonado. Rode periodicamente:
   # docker compose --profile maintenance run --rm media-cleanup
   media-cleanup:
-    image: rdo-interproject-web:${DEPLOYMENT_VERSION:-latest}
+    image: ${WEB_IMAGE:-ghcr.io/borges-br/rdo-webapp}:${DEPLOYMENT_VERSION:-latest}
     profiles: [maintenance]
     depends_on:
       postgres:

@@ -1,0 +1,144 @@
+name: Imagem do RDO
+
+# Push em master sobe o patch. Minor/major so por disparo manual.
+# A versao vive nas tags do git, nao em arquivo: nao ha commit de bump.
+on:
+  push:
+    branches: [master]
+    paths:
+      - "rdo-webapp/**"
+      - ".github/workflows/build.yml"
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: "Parte da versao a incrementar"
+        type: choice
+        options: [patch, minor, major]
+        default: patch
+
+concurrency:
+  group: imagem-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  IMAGE: ghcr.io/${{ github.repository_owner }}/rdo-webapp
+
+jobs:
+  # Roda em paralelo com o build: erro de tipo nao precisa esperar o Docker.
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: rdo-webapp/package-lock.json
+      - run: npm ci
+        working-directory: rdo-webapp
+      - run: npm run typecheck
+        working-directory: rdo-webapp
+      - run: npm run lint
+        working-directory: rdo-webapp
+
+  # Constroi UMA vez, publica marcada pelo SHA. A versao semver e aplicada
+  # depois, sem reconstruir.
+  image:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: ./rdo-webapp
+          file: ./rdo-webapp/Dockerfile
+          # Uma arquitetura so. Multi-arch dobra o tempo para servir uma VPS x86.
+          platforms: linux/amd64
+          push: true
+          tags: ${{ env.IMAGE }}:sha-${{ github.sha }}
+          # BUILD_ID vira o deploymentId do Next. Usa o SHA e nao a versao
+          # semver de proposito: a versao so e calculada depois deste job, e
+          # para protecao de skew basta ser unico por build.
+          build-args: |
+            BUILD_ID=${{ github.sha }}
+          # Cache de camadas no proprio GitHub. mode=max guarda tambem as
+          # camadas intermediarias, entao o npm ci so refaz quando o
+          # package-lock muda.
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: false
+
+  # Calcula a proxima versao, cria a tag e re-etiqueta a imagem ja publicada.
+  # imagetools create copia o manifesto no registry: nao baixa nem reconstroi.
+  release:
+    needs: [quality, image]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - id: version
+        run: |
+          set -euo pipefail
+          atual=$(git tag -l 'v[0-9]*' --sort=-v:refname | head -n1)
+          atual=${atual:-v0.0.0}
+          IFS=. read -r maior menor correcao <<< "${atual#v}"
+          case "${{ inputs.bump || 'patch' }}" in
+            major) maior=$((maior + 1)); menor=0; correcao=0 ;;
+            minor) menor=$((menor + 1)); correcao=0 ;;
+            *)     correcao=$((correcao + 1)) ;;
+          esac
+          nova="${maior}.${menor}.${correcao}"
+          echo "anterior=${atual}" >> "$GITHUB_OUTPUT"
+          echo "versao=${nova}" >> "$GITHUB_OUTPUT"
+          echo "::notice::${atual} -> v${nova}"
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Etiquetar a imagem com a versao
+        run: |
+          set -euo pipefail
+          docker buildx imagetools create \
+            --tag ${{ env.IMAGE }}:${{ steps.version.outputs.versao }} \
+            --tag ${{ env.IMAGE }}:latest \
+            ${{ env.IMAGE }}:sha-${{ github.sha }}
+
+      - name: Criar a tag no git
+        run: |
+          set -euo pipefail
+          git tag "v${{ steps.version.outputs.versao }}" "${{ github.sha }}"
+          git push origin "v${{ steps.version.outputs.versao }}"
+
+      - name: Resumo
+        run: |
+          {
+            echo "### Publicado"
+            echo ""
+            echo "- \`${{ env.IMAGE }}:${{ steps.version.outputs.versao }}\`"
+            echo "- \`${{ env.IMAGE }}:latest\`"
+            echo "- \`${{ env.IMAGE }}:sha-${{ github.sha }}\`"
+            echo ""
+            echo "Anterior: \`${{ steps.version.outputs.anterior }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
