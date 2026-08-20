@@ -335,9 +335,14 @@ export async function applyImuvPull(client: PoolClient, organizationId: string, 
  *
  * - **So cria.** Um unico POST /task. Nao existe PUT nem DELETE neste modulo,
  *   e nada aqui toca em registro que ja existia no IMUV.
- * - **Payload minimo.** Apenas `name` e o vinculo com o projeto. Nada de status,
- *   datas, orcamento, responsaveis ou prioridade: campo que nao e enviado e
- *   campo que nao pode ser estragado.
+ * - **Payload minimo.** Apenas `name`, `start_date` e o vinculo com o projeto.
+ *   Nada de status, orcamento, responsaveis ou prioridade: campo que nao e
+ *   enviado e campo que nao pode ser estragado.
+ *
+ *   `start_date` entra contrariando a documentacao, que o marca como optional:
+ *   na pratica o IMUV recusa sem ele ("Data de inicio nao pode ficar em
+ *   branco"). Usamos a data de hoje em America/Sao_Paulo, mesma convencao do
+ *   resto do app, porque a frente passa a existir no momento do cadastro.
  * - **Desligada por padrao.** Sem IMUV_ALLOW_TASK_PUBLISH=true a funcao nem
  *   chega a montar a requisicao.
  */
@@ -353,10 +358,12 @@ export async function publishFrontAsImuvTask(input: { label: string; projectExte
   const name = input.label.trim().slice(0, 200);
   if (!name) throw new Error("IMUV_TASK_NAME_REQUIRED");
 
+  const today = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Sao_Paulo" }).format(new Date());
   const created = await externalRequest("IMUV", resource("TASKS"), {
     method: "POST",
     body: {
       name,
+      start_date: today,
       relations: [{
         type: "app\\modules\\administrator\\models\\Project",
         type_id: Number(input.projectExternalId),
