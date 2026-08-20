@@ -10,11 +10,34 @@ import { roleLabel } from "@/lib/format";
 
 type Permission = { role: string; page_key: string; access: string };
 
-const accessLabels: { value: AccessLevel; label: string }[] = [
-  { value: "none", label: "Sem acesso" },
-  { value: "read", label: "Somente leitura" },
-  { value: "write", label: "Leitura e escrita" },
+const accessLabels: { value: AccessLevel; label: string; short: string }[] = [
+  { value: "none", label: "Sem acesso", short: "Sem" },
+  { value: "read", label: "Somente leitura", short: "Ler" },
+  { value: "write", label: "Leitura e escrita", short: "Editar" },
 ];
+
+/**
+ * Três estados no lugar de um <select>. A matriz tem 8 páginas por 5 perfis: com
+ * dropdowns eram 40 caixas iguais na tela, impossíveis de varrer com o olho.
+ * Aqui o nível fica visível sem abrir nada, e a escrita recebe cor própria para
+ * que "quem pode editar o quê" salte à vista.
+ */
+function AccessChoice({ role, page, current, label }: {
+  role: string; page: string; current: string; label: string;
+}) {
+  return <fieldset className="access-choice">
+    <legend className="visually-hidden">{label}</legend>
+    {accessLabels.map((option) => <label key={option.value} className={`access-option access-${option.value}`}>
+      <input
+        type="radio"
+        name={`perm:${role}:${page}`}
+        value={option.value}
+        defaultChecked={current === option.value}
+      />
+      <span title={option.label}>{option.short}</span>
+    </label>)}
+  </fieldset>;
+}
 
 function Submit({ label, pendingLabel }: { label: string; pendingLabel: string }) {
   const { pending } = useFormStatus();
@@ -39,13 +62,12 @@ function RoleChecks({ name, selected }: { name: string; selected: string[] }) {
 function UserRow({ user, isSelf }: { user: OrganizationUser; isSelf: boolean }) {
   const [state, action] = useActionState<UsersState, FormData>(updateUserAction, undefined);
   const [open, setOpen] = useState(false);
-  return <article className={`user-row${user.active ? "" : " inactive"}`}>
+  return <article className={`user-row${user.active ? "" : " inactive"}${open ? " open" : ""}`}>
+    <span className="user-initials">{user.display_name.split(/\s+/).slice(0, 2).map((part) => part[0]).join("").toUpperCase()}</span>
     <div className="user-identity">
-      <span className="user-initials">{user.display_name.split(/\s+/).slice(0, 2).map((part) => part[0]).join("").toUpperCase()}</span>
-      <div>
-        <strong>{user.display_name}{isSelf && <em> · você</em>}</strong>
-        <small>{user.email}{user.collaborator_name ? ` · ${user.collaborator_name}` : ""}</small>
-      </div>
+      <strong>{user.display_name}{isSelf && <em> · você</em>}</strong>
+      <small>{user.email}</small>
+      {user.collaborator_name && <small className="user-link">Vinculado a {user.collaborator_name}</small>}
     </div>
     <div className="user-roles">{user.roles.length
       ? user.roles.map((role) => <span className="status-badge status-neutral" key={role}>{roleLabel(role)}</span>)
@@ -86,7 +108,7 @@ export function UsersAdmin({ users, permissions, collaborators, currentUserId }:
     permissions.find((item) => item.role === role && item.page_key === page)?.access ?? "none";
 
   return <>
-    <section className="panel">
+    <section className="panel users-panel">
       <div className="resource-heading">
         <div><h2>Usuários do sistema</h2><p>Contas de acesso ao RDO, independentes do cadastro de colaboradores sincronizado.</p></div>
         <button type="button" className="button button-secondary" onClick={() => setCreating((value) => !value)}>
@@ -111,7 +133,7 @@ export function UsersAdmin({ users, permissions, collaborators, currentUserId }:
         <UserRow key={user.user_id} user={user} isSelf={user.user_id === currentUserId} />)}</div>
     </section>
 
-    <section className="panel">
+    <section className="panel users-panel">
       <div className="resource-heading"><div><h2>Permissões por página</h2><p>Cada perfil recebe acesso individual: sem acesso, somente leitura ou leitura e escrita. O administrador mantém escrita em tudo.</p></div></div>
       <form action={permissionAction}>
         <div className="table-shell"><table className="data-table permission-table">
@@ -119,9 +141,8 @@ export function UsersAdmin({ users, permissions, collaborators, currentUserId }:
           <tbody>{pages.map((page) => <tr key={page}>
             <td data-label="Página"><strong>{labels[page]}</strong></td>
             {editableRoles.map((role) => <td key={role} data-label={roleLabel(role)}>
-              <select className="input-field" name={`perm:${role}:${page}`} defaultValue={current(role, page)} aria-label={`${labels[page]} para ${roleLabel(role)}`}>
-                {accessLabels.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-              </select>
+              <AccessChoice role={role} page={page} current={current(role, page)}
+                label={`${labels[page]} para ${roleLabel(role)}`} />
             </td>)}
           </tr>)}</tbody>
         </table></div>
