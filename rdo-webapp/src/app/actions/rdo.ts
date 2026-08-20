@@ -303,7 +303,10 @@ export async function createRdoAction(_state: RdoFormState, formData: FormData):
             [session.organizationId, collaboratorId, input.workDate, startsAt, endsAt],
           );
           const covered = coveringSegment.rows[0];
-          if (!covered && !activity.divergenceReason) throw new Error("DIVERGENCE_REASON_REQUIRED");
+          // Falta de batida DIMEP nao impede registrar o dia: a divergencia e
+          // gravada de qualquer forma e fica para revisao. Exigir justificativa
+          // aqui travava o RDO por causa de sincronizacao de ponto, que depende
+          // de evento externo e pode nem ter acontecido ainda.
           const allocation = await client.query<{ id: string }>(
             `insert into rdo.work_allocations
               (organization_id, rdo_version_id, activity_group_id, collaborator_id,
@@ -322,7 +325,11 @@ export async function createRdoAction(_state: RdoFormState, formData: FormData):
               `insert into rdo.time_divergences
                 (organization_id, allocation_id, divergence_type, justification, created_by_user_id)
                values ($1,$2,'missing_punch',$3,$4)`,
-              [session.organizationId, allocation.rows[0].id, activity.divergenceReason, session.userId],
+              // justification tem CHECK de nao-vazio no banco: sem texto do lider,
+              // registramos o motivo real observado.
+              [session.organizationId, allocation.rows[0].id,
+                activity.divergenceReason?.trim() || "Sem cobertura DIMEP no momento do registro; pendente de conciliação.",
+                session.userId],
             );
           }
         }
@@ -442,7 +449,6 @@ export async function createRdoAction(_state: RdoFormState, formData: FormData):
       if (error.message === "PROJECT_NOT_ALLOWED") return { error: "Você não tem acesso a este projeto." };
       if (error.message === "INVALID_SCOPE") return { error: "Tarefa/local não pertence ao projeto ou há um funcionário inativo na equipe." };
       if (error.message === "INVALID_RESOURCE") return { error: "Um material ou equipamento não pertence ao catálogo ativo." };
-      if (error.message === "DIVERGENCE_REASON_REQUIRED") return { error: "Informe a justificativa de horário: não há cobertura DIMEP para toda a atividade." };
       if (error.message === "EVIDENCE_NOT_AVAILABLE") return { error: "Uma das evidências não está mais disponível. Envie as fotos e áudios novamente." };
     }
     console.error("Falha ao criar RDO", error);

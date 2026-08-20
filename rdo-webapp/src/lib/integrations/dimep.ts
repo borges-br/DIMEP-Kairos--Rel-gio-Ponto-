@@ -392,6 +392,20 @@ export async function applyDimepPunches(client: PoolClient, organizationId: stri
   return { runId, written, rejected, ackIds: [...ackIds], connectionId };
 }
 
+/**
+ * O ponteiro so avanca com os Ids que o proprio Kairos devolveu, e o extrator
+ * procura os campos "Id" e "ID". Quando nenhum aparece, adivinhar outro nome
+ * seria perigoso: confirmar o Id errado faria o Kairos dar por coletadas
+ * batidas que nunca chegaram, e essas se perderiam. Em vez de arriscar,
+ * relatamos quais campos vieram, para a correcao ser feita com o nome certo.
+ */
+export function pointerFieldHint(data: unknown[]) {
+  const first = data.find(isObject);
+  if (!first) return "";
+  const keys = Object.keys(first).slice(0, 30);
+  return keys.length ? ` Campos recebidos do Kairos: ${keys.join(", ")}.` : "";
+}
+
 export async function acknowledgeDimepPunches(ids: string[]) {
   if (!ids.length) return { acknowledged: 0, skipped: true, reason: "A resposta do Kairos não forneceu Id para o avanço seguro do ponteiro." };
   const numeric = ids.map(Number).filter((id) => Number.isSafeInteger(id) && id > 0);

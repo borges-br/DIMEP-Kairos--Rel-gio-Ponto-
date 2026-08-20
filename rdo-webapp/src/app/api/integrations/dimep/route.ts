@@ -4,8 +4,7 @@ import { withTenant } from "@/lib/db";
 import {
   acknowledgeDimepPunches, applyDimepEmployees, applyDimepPunches,
   fetchDimepEmployees, fetchDimepPunches, previewDimepEmployees, previewDimepPunches,
-  recordDimepPointerResult, validateDimepPeriod, type DimepEmployeeConfirmation,
-} from "@/lib/integrations/dimep";
+  recordDimepPointerResult, validateDimepPeriod, type DimepEmployeeConfirmation, pointerFieldHint } from "@/lib/integrations/dimep";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -76,7 +75,7 @@ export async function POST(request: Request) {
     let pointer: Awaited<ReturnType<typeof acknowledgeDimepPunches>> = { acknowledged: 0, skipped: true, reason: "Ponteiro não processado." }; let pointerError = "";
     try { pointer = await acknowledgeDimepPunches(result.applied.ackIds); }
     catch (error) { pointerError = error instanceof Error ? error.message : "Falha ao avançar ponteiro."; }
-    if (pointer.skipped && data.length > 0) pointerError = pointer.reason || "O Kairos não forneceu identificadores para confirmar o ponteiro.";
+    if (pointer.skipped && data.length > 0) pointerError = `${pointer.reason || "O Kairos não forneceu identificadores para confirmar o ponteiro."}${pointerFieldHint(data)}`;
     await withTenant(session.organizationId, (client) => recordDimepPointerResult(client, session.organizationId, result.applied.runId, !pointerError, pointerError || `Ponteiro confirmado: ${pointer.acknowledged}`));
     revalidatePath("/employees"); revalidatePath("/hours"); revalidatePath("/settings");
     return Response.json({ ...result.applied, ackIds: undefined, pointer, pointerError: pointerError || null });

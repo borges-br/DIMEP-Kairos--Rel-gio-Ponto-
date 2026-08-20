@@ -85,9 +85,12 @@ export async function createUserAction(_state: UsersState, formData: FormData): 
       // satisfaria essa condicao no proprio insert.
       const userId = randomUUID();
       await client.query(
+        // O e-mail vai em dois parametros distintos de proposito. Reaproveitar o
+        // mesmo placeholder em email (citext) e auth_subject (text) deixa o tipo
+        // indeterminado e o Postgres recusa com 42P08, ambiguous_parameter.
         `insert into rdo.app_users (id, display_name, email, phone_e164, auth_subject)
-         values ($1, $2, $3, $4, $3)`,
-        [userId, input.displayName, input.email, input.phone],
+         values ($1, $2, $3, $4, $5)`,
+        [userId, input.displayName, input.email, input.phone, input.email],
       );
       await client.query(
         `insert into rdo.organization_users (organization_id, user_id, collaborator_id)

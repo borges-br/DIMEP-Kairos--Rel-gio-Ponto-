@@ -7,12 +7,13 @@ import { StatusBadge } from "@/components/status-badge";
 import { MediaManager } from "@/components/media-manager";
 import { getRdoDetail } from "@/lib/dal";
 import { formatDate } from "@/lib/format";
+import { requirePageAccess } from "@/lib/permissions";
 
 export const metadata: Metadata = { title: "Detalhes do RDO" };
 
 const workflowMessages: Record<string, string> = {
   ok: "Etapa do fluxo registrada com sucesso.",
-  blocked: "O RDO ainda tem pendências de conciliação e não pode ser enviado.",
+  blocked: "O RDO ainda tem pendências obrigatórias — atividade sem equipe, checklist de segurança ou ocorrência sem evidência. A conciliação DIMEP não impede o envio.",
   "invalid-status": "Esta ação não é permitida no status atual.",
   "not-owner": "Somente o líder responsável pode enviar este RDO.",
   "comment-required": "Informe o motivo da devolução.",
@@ -31,6 +32,7 @@ const weatherLabels: Record<string, string> = { sunny: "Ensolarado", cloudy: "Nu
 
 export default async function RdoDetailPage({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<{ workflow?: string }> }) {
   const { id } = await params;
+  await requirePageAccess("rdos");
   const detail = await getRdoDetail(id);
   if (!detail) notFound();
   const workflow = (await searchParams).workflow;

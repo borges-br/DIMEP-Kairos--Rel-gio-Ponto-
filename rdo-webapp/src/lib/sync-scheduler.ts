@@ -4,8 +4,7 @@ import type { PoolClient } from "pg";
 import { withTenant } from "@/lib/db";
 import {
   acknowledgeDimepPunches, applyDimepPunches, fetchDimepPunches,
-  previewDimepPunches, recordDimepPointerResult,
-} from "@/lib/integrations/dimep";
+  previewDimepPunches, recordDimepPointerResult, pointerFieldHint } from "@/lib/integrations/dimep";
 
 export type SyncSchedule = {
   provider: "dimep";
@@ -108,7 +107,7 @@ async function importPunches(organizationId: string, lookbackDays: number): Prom
   let pointerMessage = "";
   try {
     const pointer = await acknowledgeDimepPunches(applied.ackIds);
-    if (pointer.skipped && data.length > 0) pointerMessage = pointer.reason || "Ponteiro não confirmado.";
+    if (pointer.skipped && data.length > 0) pointerMessage = `${pointer.reason || "Ponteiro não confirmado."}${pointerFieldHint(data)}`;
   } catch (error) {
     pointerMessage = error instanceof Error ? error.message : "Falha ao avançar o ponteiro.";
   }
