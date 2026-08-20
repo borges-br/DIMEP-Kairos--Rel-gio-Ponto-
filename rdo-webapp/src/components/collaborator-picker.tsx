@@ -30,6 +30,7 @@ export function CollaboratorPicker({
   onChange: (ids: string[]) => void;
 }) {
   const [open, setOpen] = useState(false);
+  const [showAll, setShowAll] = useState(false);
   const [search, setSearch] = useState("");
   const searchRef = useRef<HTMLInputElement>(null);
   const selected = collaborators.filter((item) => selectedIds.includes(item.id));
@@ -61,10 +62,12 @@ export function CollaboratorPicker({
     <div className="team-selection-summary">
       <div>
         <strong>{selected.length} colaborador(es) selecionado(s)</strong>
-        {selected.length ? <ul>{selected.slice(0, 4).map((member) => <li key={member.id}>
+        {selected.length ? <ul>{(showAll ? selected : selected.slice(0, 4)).map((member) => <li key={member.id}>
           <span><b>{member.name}</b>{member.jobTitle && <small>{member.jobTitle}</small>}</span>
           <button type="button" onClick={() => toggle(member.id)} aria-label={`Remover ${member.name}`}><CloseIcon /></button>
-        </li>)}{selected.length > 4 && <li className="team-selection-more">+ {selected.length - 4} colaborador(es)</li>}</ul> : <small>Ninguém selecionado.</small>}
+        </li>)}{selected.length > 4 && <li><button type="button" className="team-selection-more" onClick={() => setShowAll((value) => !value)} aria-expanded={showAll}>
+          {showAll ? "Mostrar menos" : `+ ${selected.length - 4} colaborador(es)`}
+        </button></li>}</ul> : <small>Ninguém selecionado.</small>}
       </div>
       <button type="button" className="button button-secondary" onClick={() => setOpen(true)}><PlusIcon />Adicionar colaborador</button>
     </div>

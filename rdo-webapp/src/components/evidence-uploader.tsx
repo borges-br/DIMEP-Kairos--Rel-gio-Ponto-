@@ -3,11 +3,16 @@
 import { useEffect, useRef, useState } from "react";
 import { CheckIcon, ClipboardIcon, CloseIcon, WarningIcon } from "@/components/icons";
 import type { DraftEvidence } from "@/lib/rdo-draft";
+import { compressImage } from "@/lib/compress-image";
 
 type EvidenceItem = {
   key: string;
   name: string;
   sizeBytes: number;
+  /** Tamanho apos a compressao, quando ela valeu a pena. */
+  sentBytes: number | null;
+  /** Legenda vinda de um rascunho recuperado; a edicao atual mora em `captions`. */
+  caption: string;
   isImage: boolean;
   previewUrl: string | null;
   mediaId: string | null;
@@ -15,6 +20,9 @@ type EvidenceItem = {
 };
 
 const maxFiles = 8;
+/** Envio em blocos: uma foto grande nao segura as outras, e o pool de conexoes
+ *  do servidor nao recebe oito requisicoes simultaneas. */
+const uploadConcurrency = 3;
 
 function sizeLabel(bytes: number) {
   return `${(bytes / 1024 / 1024).toFixed(2)} MB`;
@@ -44,6 +52,9 @@ export function EvidenceUploader({ onPendingChange, onItemsChange, restored }: {
 }) {
   const [uploads, setUploads] = useState<EvidenceItem[]>([]);
   const [discarded, setDiscarded] = useState<string[]>([]);
+  // Legendas ficam fora de EvidenceItem porque os itens recuperados de rascunho
+  // sao derivados da prop a cada render e nao teriam onde guardar a edicao.
+  const [captions, setCaptions] = useState<Record<string, string>>({});
   const previewUrls = useRef(new Set<string>());
 
   const restoredItems: EvidenceItem[] = (restored ?? [])
@@ -52,6 +63,8 @@ export function EvidenceUploader({ onPendingChange, onItemsChange, restored }: {
       key: `restaurada-${entry.mediaId}`,
       name: entry.name,
       sizeBytes: entry.sizeBytes,
+      sentBytes: null,
+      caption: entry.caption ?? "",
       isImage: entry.isImage,
       previewUrl: null,
       mediaId: entry.mediaId,
@@ -60,13 +73,22 @@ export function EvidenceUploader({ onPendingChange, onItemsChange, restored }: {
   const items = [...restoredItems, ...uploads];
   const pendingCount = items.filter((item) => !item.mediaId && !item.error).length;
   const readyIds = [...new Set(items.map((item) => item.mediaId).filter((id): id is string => Boolean(id)))];
+  const captionOf = (item: EvidenceItem) => captions[item.key] ?? item.caption;
+  // Indexado por mediaId, que e o que a action conhece. Arquivos identicos
+  // compartilham o mesmo registro de midia: a primeira legenda preenchida vence.
+  const captionByMedia = items.reduce<Record<string, string>>((acc, item) => {
+    const text = captionOf(item).trim();
+    if (item.mediaId && text && !acc[item.mediaId]) acc[item.mediaId] = text.slice(0, 500);
+    return acc;
+  }, {});
 
   useEffect(() => { onPendingChange?.(pendingCount > 0); }, [pendingCount, onPendingChange]);
 
   // A lista é derivada a cada render; avisar o rascunho só quando ela mudar de
   // fato evita um ciclo de atualização a cada tecla digitada no formulário.
   const stored = JSON.stringify(items.filter((item) => item.mediaId).map((item) => ({
-    mediaId: item.mediaId, name: item.name, sizeBytes: item.sizeBytes, isImage: item.isImage,
+    mediaId: item.mediaId, name: item.name, sizeBytes: item.sentBytes ?? item.sizeBytes, isImage: item.isImage,
+    caption: captionOf(item),
   })));
   useEffect(() => { onItemsChange?.(JSON.parse(stored) as DraftEvidence[]); }, [stored, onItemsChange]);
 
@@ -74,6 +96,27 @@ export function EvidenceUploader({ onPendingChange, onItemsChange, restored }: {
     const urls = previewUrls.current;
     return () => { urls.forEach((url) => URL.revokeObjectURL(url)); urls.clear(); };
   }, []);
+
+  const patch = (key: string, changes: Partial<EvidenceItem>) =>
+    setUploads((current) => current.map((item) => item.key === key ? { ...item, ...changes } : item));
+
+  /** Um arquivo por requisição: o status deixa de ser do lote e passa a ser de
+   *  cada evidência, e uma falha isolada não derruba as demais. */
+  async function sendOne(key: string, file: File) {
+    try {
+      const prepared = await compressImage(file);
+      if (prepared !== file) patch(key, { sentBytes: prepared.size });
+      const body = new FormData();
+      body.append("files", prepared);
+      const response = await fetch("/api/media/staging", { method: "POST", body });
+      const result = await response.json() as { uploaded?: { id: string }[]; error?: string };
+      const mediaId = result.uploaded?.[0]?.id;
+      if (!response.ok || !mediaId) throw new Error(result.error || "Falha no envio.");
+      patch(key, { mediaId });
+    } catch (caught) {
+      patch(key, { error: caught instanceof Error ? caught.message : "Não foi possível enviar a evidência." });
+    }
+  }
 
   async function send(files: File[]) {
     const batch = files.slice(0, Math.max(0, maxFiles - items.length));
@@ -85,6 +128,8 @@ export function EvidenceUploader({ onPendingChange, onItemsChange, restored }: {
         key: `${Date.now()}-${index}-${file.name}`,
         name: file.name,
         sizeBytes: file.size,
+        sentBytes: null,
+        caption: "",
         isImage: file.type.startsWith("image/"),
         previewUrl,
         mediaId: null,
@@ -93,21 +138,9 @@ export function EvidenceUploader({ onPendingChange, onItemsChange, restored }: {
     });
     setUploads((current) => [...current, ...staged]);
 
-    const body = new FormData();
-    batch.forEach((file) => body.append("files", file));
-    try {
-      const response = await fetch("/api/media/staging", { method: "POST", body });
-      const result = await response.json() as { uploaded?: { id: string }[]; error?: string };
-      if (!response.ok || !result.uploaded) throw new Error(result.error || "Falha no envio.");
-      const uploaded = result.uploaded;
-      setUploads((current) => current.map((item) => {
-        const position = staged.findIndex((entry) => entry.key === item.key);
-        return position === -1 ? item : { ...item, mediaId: uploaded[position]?.id ?? null };
-      }));
-    } catch (caught) {
-      const message = caught instanceof Error ? caught.message : "Não foi possível enviar a evidência.";
-      setUploads((current) => current.map((item) => staged.some((entry) => entry.key === item.key)
-        ? { ...item, error: message } : item));
+    for (let start = 0; start < staged.length; start += uploadConcurrency) {
+      await Promise.all(staged.slice(start, start + uploadConcurrency)
+        .map((item, offset) => sendOne(item.key, batch[start + offset])));
     }
   }
 
@@ -134,6 +167,7 @@ export function EvidenceUploader({ onPendingChange, onItemsChange, restored }: {
 
   return <>
     <input type="hidden" name="evidenceMediaIds" value={JSON.stringify(readyIds)} />
+    <input type="hidden" name="evidenceCaptions" value={JSON.stringify(captionByMedia)} />
     <div className="evidence-grid">
       <label className="file-picker evidence-file-picker">
         <span>Fotos do serviço</span>
@@ -151,7 +185,7 @@ export function EvidenceUploader({ onPendingChange, onItemsChange, restored }: {
       <Thumb item={item} />
       <div>
         <strong>{item.name}</strong>
-        <small>{sizeLabel(item.sizeBytes)}</small>
+        <small>{item.sentBytes === null ? sizeLabel(item.sizeBytes) : `${sizeLabel(item.sizeBytes)} → ${sizeLabel(item.sentBytes)}`}</small>
         {item.error
           ? <span className="evidence-status failed"><WarningIcon />{item.error}</span>
           : item.mediaId
@@ -159,9 +193,16 @@ export function EvidenceUploader({ onPendingChange, onItemsChange, restored }: {
             : <span className="evidence-status sending">Enviando…</span>}
       </div>
       <button type="button" onClick={() => remove(item)} aria-label={`Remover ${item.name}`}><CloseIcon /></button>
+      <input
+        className="input-field evidence-item-caption"
+        value={captionOf(item)}
+        maxLength={500}
+        placeholder={item.isImage ? "Legenda desta foto (opcional)" : "Legenda deste áudio (opcional)"}
+        aria-label={`Legenda de ${item.name}`}
+        onChange={(event) => setCaptions((current) => ({ ...current, [item.key]: event.target.value }))}
+      />
     </li>)}</ul>}
 
-    <label className="field-group evidence-caption"><span>Legenda das evidências</span><input className="input-field" name="evidenceCaption" maxLength={500} placeholder="Ex.: painel após o comissionamento" /></label>
     <p className="readiness-note" role="status">
       {pendingCount
         ? `Enviando ${pendingCount} evidência(s)… o rascunho só pode ser salvo quando o envio terminar.`

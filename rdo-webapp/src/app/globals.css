@@ -605,6 +605,24 @@ input[type="date"].input-field, input[type="time"].input-field { color-scheme: d
 .detail-summary small { color: var(--text-3); font-size: 12px; }
 .detail-summary strong { margin-top: 3px; font-size: 15px; }
 
+/* O cartao de equipe cresce para caber a lista aberta; os demais ficam alinhados
+   pelo topo para nao esticarem junto. */
+.detail-summary { align-items: start; }
+.detail-summary .team-card { flex-wrap: wrap; }
+.team-reveal { flex: 1 0 100%; min-width: 0; }
+.team-reveal summary {
+  display: inline-flex; align-items: center; gap: 6px; width: fit-content; margin-top: 10px;
+  color: var(--orange); font-size: 12px; cursor: pointer; list-style: none;
+}
+.team-reveal summary::-webkit-details-marker { display: none; }
+.team-reveal summary::after { content: ""; width: 6px; height: 6px; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; transform: translateY(-2px) rotate(45deg); transition: transform .15s ease; }
+.team-reveal[open] summary::after { transform: translateY(1px) rotate(-135deg); }
+.team-reveal summary:hover { text-decoration: underline; }
+.team-reveal ul { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 6px; margin-top: 10px; padding-top: 12px; border-top: 1px solid var(--border); }
+.team-reveal li { display: flex; min-width: 0; flex-direction: column; padding: 7px 10px; border-radius: var(--r-sm); background: var(--bg-subtle); }
+.team-reveal li b { overflow: hidden; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.team-reveal li small { margin-top: 2px; overflow: hidden; color: var(--text-3); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+
 .header-actions { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 10px; }
 .detail-panel { overflow: hidden; margin-bottom: 16px; }
 .read-only-panel .panel-heading { padding: 22px; }
@@ -812,7 +830,13 @@ input[type="date"].input-field, input[type="time"].input-field { color-scheme: d
 .team-selection-summary li button { display: grid; width: 28px; height: 28px; padding: 0; place-items: center; flex: none; border: 0; border-radius: var(--r-sm); color: var(--text-3); background: transparent; cursor: pointer; }
 .team-selection-summary li button:hover { color: var(--danger); background: var(--danger-dim); }
 .team-selection-summary li button svg { width: 14px; height: 14px; }
-.team-selection-summary .team-selection-more { display: block; color: var(--text-3); font-size: 11px; }
+/* Sobrescreve o quadrado 28x28 do botao de remover, que tambem casa com
+   "li button": este e um botao de texto que abre o restante da lista. */
+.team-selection-summary li button.team-selection-more {
+  display: block; width: auto; height: auto; padding: 6px 2px; color: var(--text-3);
+  font-size: 11px; text-align: left; background: transparent;
+}
+.team-selection-summary li button.team-selection-more:hover { color: var(--orange); background: transparent; text-decoration: underline; }
 .collaborator-modal { width: min(780px, 100%); }
 .collaborator-search { position: relative; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 10px; padding: 16px 22px; border-bottom: 1px solid var(--border); background: var(--bg-subtle); }
 .collaborator-search > svg { width: 18px; height: 18px; color: var(--text-3); }
@@ -898,13 +922,14 @@ input[type="date"].input-field, input[type="time"].input-field { color-scheme: d
 .evidence-placeholder span { max-width: 44ch; margin: 7px 0 16px; color: var(--text-3); font-size: 12px; }
 .evidence-placeholder .button { margin-top: auto; }
 .evidence-file-picker { min-height: 150px; }
-.evidence-caption { margin-top: 14px; }
-
 .evidence-queue { display: grid; gap: 10px; margin: 14px 0 0; padding: 0; list-style: none; }
 .evidence-queue li {
-  display: flex; align-items: center; gap: 12px; padding: 10px 12px;
+  display: flex; align-items: center; flex-wrap: wrap; gap: 12px; padding: 10px 12px;
   border: 1px solid var(--border); border-radius: var(--r-md); background: var(--bg-subtle);
 }
+/* A legenda ocupa a linha inteira abaixo da miniatura, do nome e do botao de
+   remover, para nao espremer nenhum deles em tela estreita. */
+.evidence-queue li > .evidence-item-caption { flex: 1 0 100%; height: 34px; font-size: 12px; }
 .evidence-queue li.ready { border-color: rgba(67, 180, 122, .35); }
 .evidence-queue li.failed { border-color: rgba(226, 100, 100, .35); background: var(--danger-dim); }
 .evidence-queue li > img { width: 64px; height: 64px; flex: none; border-radius: var(--r-sm); object-fit: cover; background: var(--surface-raised); }

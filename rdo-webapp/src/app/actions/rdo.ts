@@ -127,11 +127,13 @@ export async function createRdoAction(_state: RdoFormState, formData: FormData):
   let materials: unknown = null;
   let equipmentUsage: unknown = null;
   let evidenceMediaIds: unknown = null;
+  let evidenceCaptions: unknown = null;
   try {
     activities = JSON.parse(String(formData.get("activities") ?? "null"));
     materials = JSON.parse(String(formData.get("materials") ?? "[]"));
     equipmentUsage = JSON.parse(String(formData.get("equipmentUsage") ?? "[]"));
     evidenceMediaIds = JSON.parse(String(formData.get("evidenceMediaIds") ?? "[]"));
+    evidenceCaptions = JSON.parse(String(formData.get("evidenceCaptions") ?? "{}"));
   } catch {
     return { error: "As atividades enviadas estão inválidas. Recarregue a página." };
   }
@@ -174,8 +176,13 @@ export async function createRdoAction(_state: RdoFormState, formData: FormData):
   // As evidências já subiram por /api/media/staging enquanto o líder preenchia o
   // formulário; aqui chegam apenas os identificadores para criar o vínculo.
   const parsedEvidence = z.array(z.string().uuid()).max(maxEvidenceFiles).safeParse(evidenceMediaIds);
-  const evidenceCaption = String(formData.get("evidenceCaption") || "").trim().slice(0, 500);
   if (!parsedEvidence.success) return { error: `Selecione no máximo ${maxEvidenceFiles} evidências por rascunho.` };
+  // Legenda por arquivo, indexada pelo id da mídia. Rascunho antigo não traz o
+  // campo: nesse caso o mapa fica vazio e a evidência entra sem legenda.
+  const parsedCaptions = z.record(z.string().uuid(), z.string().trim().max(500))
+    .safeParse(evidenceCaptions ?? {});
+  if (!parsedCaptions.success) return { error: "As legendas das evidências estão inválidas. Recarregue a página." };
+  const captionFor = (mediaId: string) => parsedCaptions.data[mediaId]?.trim() || null;
   // Arquivos idênticos compartilham o mesmo registro de mídia (deduplicação por sha256).
   const evidenceIds = [...new Set(parsedEvidence.data)];
   const requestHeaders = await headers();
@@ -406,13 +413,13 @@ export async function createRdoAction(_state: RdoFormState, formData: FormData):
           await client.query(
             `insert into rdo.evidence_links (organization_id, media_file_id, rdo_version_id, caption)
              values ($1,$2,$3,$4) on conflict do nothing`,
-            [session.organizationId, media.id, versionId, evidenceCaption || null],
+            [session.organizationId, media.id, versionId, captionFor(media.id)],
           );
           if (occurrenceId) {
             await client.query(
               `insert into rdo.evidence_links (organization_id, media_file_id, occurrence_id, caption)
                values ($1,$2,$3,$4) on conflict do nothing`,
-              [session.organizationId, media.id, occurrenceId, evidenceCaption || null],
+              [session.organizationId, media.id, occurrenceId, captionFor(media.id)],
             );
           }
         }

@@ -15,7 +15,7 @@ import {
 /** Campos não controlados que o rascunho local precisa reter. */
 const draftFieldNames = [
   "workDate", "generalNotes", "safetyDetails", "correctiveAction", "temperatureC",
-  "weatherImpactDescription", "pendingItem", "nextStep", "evidenceCaption",
+  "weatherImpactDescription", "pendingItem", "nextStep",
   "occurrenceType", "occurrenceSeverity", "occurrenceTime", "occurrenceDescription", "occurrenceAction",
   "qualityType", "qualityResult", "qualityDescription", "qualityCorrectiveAction",
 ];

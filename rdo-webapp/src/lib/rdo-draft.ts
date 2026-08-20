@@ -19,7 +19,9 @@ export type MaterialDraft = { key: string; materialId: string; movement: "" | "u
 export type EquipmentDraft = { key: string; equipmentId: string; usageMinutes: string; downtimeMinutes: string; downtimeReason: string };
 
 /** Evidência já armazenada no servidor; sobrevive ao fechamento do navegador. */
-export type DraftEvidence = { mediaId: string; name: string; sizeBytes: number; isImage: boolean };
+/** `caption` e opcional: rascunhos gravados antes da legenda por arquivo nao a
+ *  possuem e precisam continuar abrindo. */
+export type DraftEvidence = { mediaId: string; name: string; sizeBytes: number; isImage: boolean; caption?: string };
 
 export type RdoDraftContent = {
   projectId: string;
