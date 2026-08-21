@@ -28,7 +28,11 @@ Em ambientes que já tenham dados, não apague o volume para aplicar mudanças. 
 
 Basta criar o arquivo aqui, com o próximo número. **Não é preciso editar o `docker-compose.mvp.yml`.**
 
-O `initdb` do Postgres roda apenas `001` e `002`, e só em volume vazio. Todo o resto é aplicado pelo serviço `migrate`, que monta este diretório inteiro e executa `*.sql` em ordem, pulando o `001`. Isso vale tanto para instalação nova quanto para base existente.
+O schema inteiro é aplicado pelo serviço `migrate`, que roda a imagem `rdo-migrations` — os `.sql` vão **dentro da imagem**, publicados pelo mesmo workflow do webapp. O `docker-entrypoint-initdb.d` do Postgres não é mais usado.
+
+O `apply.sh` decide sozinho o cenário: consulta `to_regclass('rdo.organizations')` e, se a base ainda não tem schema, roda o `001` antes do resto. Depois aplica o `002` e todos os `*.sql` de `003` em diante, em ordem. É o mesmo caminho para instalação nova e para base existente.
+
+Isso substituiu um arranjo com bind mount de `./database`, que quebrava de forma silenciosa: quando o caminho não existe no host, o Docker cria um **diretório vazio** no lugar do arquivo, e o erro só aparecia lá na frente como `psql: could not read from input file: Is a directory`. Com o Portainer isso era quase garantido, porque ele clona o repositório para dentro do próprio container, enquanto quem resolve o bind mount é o daemon do Docker no host.
 
 Por isso **toda migração de `003` em diante precisa ser idempotente**: ela roda de novo a cada subida da stack. Use `CREATE TABLE IF NOT EXISTS`, `ADD COLUMN IF NOT EXISTS`, `CREATE OR REPLACE FUNCTION`, `DROP POLICY IF EXISTS` antes de `CREATE POLICY`, `DROP TRIGGER IF EXISTS` antes de `CREATE TRIGGER` (ou um `DO` que consulte `pg_trigger`) e `ON CONFLICT DO NOTHING` em qualquer seed.
 

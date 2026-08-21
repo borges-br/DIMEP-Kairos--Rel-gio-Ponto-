@@ -1,0 +1,7 @@
+# Scripts e Dockerfiles rodam dentro de container Linux. Gravados com CRLF, o
+# shell trata o \r como parte do comando: continuacao de linha com barra
+# invertida deixa de funcionar e o erro que aparece nao tem relacao obvia com a
+# causa. Este repositorio e editado no Windows, entao a normalizacao precisa
+# estar declarada e nao depender da configuracao de cada maquina.
+*.sh text eol=lf
+Dockerfile text eol=lf
