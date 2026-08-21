@@ -7,6 +7,7 @@ on:
     branches: [master]
     paths:
       - "rdo-webapp/**"
+      - "database/**"
       - ".github/workflows/build.yml"
   workflow_dispatch:
     inputs:
@@ -21,7 +22,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  IMAGE: ghcr.io/${{ github.repository_owner }}/rdo-webapp
+  REGISTRO: ghcr.io/${{ github.repository_owner }}
 
 jobs:
   # Roda em paralelo com o build: erro de tipo nao precisa esperar o Docker.
@@ -41,15 +42,20 @@ jobs:
       - run: npm run lint
         working-directory: rdo-webapp
 
-  # Constroi UMA vez, publica marcada pelo SHA. A versao semver e aplicada
-  # depois, sem reconstruir.
+  # Constroi UMA vez cada imagem, publicada marcada pelo SHA. A versao semver
+  # e aplicada depois, sem reconstruir. As duas rodam em paralelo.
   image:
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
-    outputs:
-      digest: ${{ steps.build.outputs.digest }}
+    strategy:
+      matrix:
+        include:
+          - nome: rdo-webapp
+            contexto: ./rdo-webapp
+          - nome: rdo-migrations
+            contexto: ./database
     steps:
       - uses: actions/checkout@v4
 
@@ -61,25 +67,24 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - id: build
-        uses: docker/build-push-action@v6
+      - uses: docker/build-push-action@v6
         with:
-          context: ./rdo-webapp
-          file: ./rdo-webapp/Dockerfile
+          context: ${{ matrix.contexto }}
+          file: ${{ matrix.contexto }}/Dockerfile
           # Uma arquitetura so. Multi-arch dobra o tempo para servir uma VPS x86.
           platforms: linux/amd64
           push: true
-          tags: ${{ env.IMAGE }}:sha-${{ github.sha }}
-          # BUILD_ID vira o deploymentId do Next. Usa o SHA e nao a versao
-          # semver de proposito: a versao so e calculada depois deste job, e
-          # para protecao de skew basta ser unico por build.
+          tags: ${{ env.REGISTRO }}/${{ matrix.nome }}:sha-${{ github.sha }}
+          # BUILD_ID vira o deploymentId do Next na imagem do webapp. Usa o SHA
+          # e nao a versao semver de proposito: a versao so e calculada depois
+          # deste job, e para protecao de skew basta ser unico por build.
           build-args: |
             BUILD_ID=${{ github.sha }}
-          # Cache de camadas no proprio GitHub. mode=max guarda tambem as
-          # camadas intermediarias, entao o npm ci so refaz quando o
-          # package-lock muda.
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # Cache de camadas no proprio GitHub, com escopo por imagem para uma
+          # nao invalidar a outra. mode=max guarda tambem as intermediarias,
+          # entao o npm ci so refaz quando o package-lock muda.
+          cache-from: type=gha,scope=${{ matrix.nome }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.nome }}
           provenance: false
 
   # Calcula a proxima versao, cria a tag e re-etiqueta a imagem ja publicada.
@@ -117,13 +122,15 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Etiquetar a imagem com a versao
+      - name: Etiquetar as imagens com a versao
         run: |
           set -euo pipefail
-          docker buildx imagetools create \
-            --tag ${{ env.IMAGE }}:${{ steps.version.outputs.versao }} \
-            --tag ${{ env.IMAGE }}:latest \
-            ${{ env.IMAGE }}:sha-${{ github.sha }}
+          for nome in rdo-webapp rdo-migrations; do
+            docker buildx imagetools create \
+              --tag ${{ env.REGISTRO }}/$nome:${{ steps.version.outputs.versao }} \
+              --tag ${{ env.REGISTRO }}/$nome:latest \
+              ${{ env.REGISTRO }}/$nome:sha-${{ github.sha }}
+          done
 
       - name: Criar a tag no git
         run: |
@@ -136,9 +143,9 @@ jobs:
           {
             echo "### Publicado"
             echo ""
-            echo "- \`${{ env.IMAGE }}:${{ steps.version.outputs.versao }}\`"
-            echo "- \`${{ env.IMAGE }}:latest\`"
-            echo "- \`${{ env.IMAGE }}:sha-${{ github.sha }}\`"
+            echo "- \`${{ env.REGISTRO }}/rdo-webapp:${{ steps.version.outputs.versao }}\`"
+            echo "- \`${{ env.REGISTRO }}/rdo-migrations:${{ steps.version.outputs.versao }}\`"
+            echo "- ambas tambem em \`:latest\` e \`:sha-${{ github.sha }}\`"
             echo ""
             echo "Anterior: \`${{ steps.version.outputs.anterior }}\`"
           } >> "$GITHUB_STEP_SUMMARY"
