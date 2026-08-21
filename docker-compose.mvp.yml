@@ -17,18 +17,13 @@ services:
       PGTZ: America/Sao_Paulo
     volumes:
       - rdo_postgres_data:/var/lib/postgresql/data
+      # Somente o schema base e o papel de runtime. Todo o resto e aplicado
+      # pelo servico `migrate`, que roda tanto em volume novo quanto em base ja
+      # existente. Duas listas paralelas era o que deixava o 005 de fora daqui:
+      # o 011 cria indice em dimep_sync_issues, a tabela nao existia, o initdb
+      # abortava com ON_ERROR_STOP e o Postgres nunca ficava healthy.
       - ./database/001_initial_schema.sql:/docker-entrypoint-initdb.d/001_initial_schema.sql:ro
       - ./database/002_create_runtime_user.sh:/docker-entrypoint-initdb.d/002_create_runtime_user.sh:ro
-      - ./database/003_field_diary_extensions.sql:/docker-entrypoint-initdb.d/003_field_diary_extensions.sql:ro
-      - ./database/004_collaborator_profile_overrides.sql:/docker-entrypoint-initdb.d/004_collaborator_profile_overrides.sql:ro
-      - ./database/006_hr_employee_imuv.sql:/docker-entrypoint-initdb.d/006_hr_employee_imuv.sql:ro
-      - ./database/007_work_assignments.sql:/docker-entrypoint-initdb.d/007_work_assignments.sql:ro
-      - ./database/008_sanitize_collaborator_labels.sql:/docker-entrypoint-initdb.d/008_sanitize_collaborator_labels.sql:ro
-      - ./database/009_sync_schedules.sql:/docker-entrypoint-initdb.d/009_sync_schedules.sql:ro
-      - ./database/010_rbac_and_duplicates.sql:/docker-entrypoint-initdb.d/010_rbac_and_duplicates.sql:ro
-      - ./database/011_performance_indexes.sql:/docker-entrypoint-initdb.d/011_performance_indexes.sql:ro
-      - ./database/012_work_location_publishing.sql:/docker-entrypoint-initdb.d/012_work_location_publishing.sql:ro
-      - ./database/013_submission_without_dimep_gate.sql:/docker-entrypoint-initdb.d/013_submission_without_dimep_gate.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 10s
@@ -44,33 +39,19 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    # O diretorio inteiro, nao arquivo por arquivo: migracao nova passa a ser
+    # aplicada sem editar o compose, e nao ha mais como esquecer uma.
     volumes:
-      - ./database/003_field_diary_extensions.sql:/migrations/003_field_diary_extensions.sql:ro
-      - ./database/004_collaborator_profile_overrides.sql:/migrations/004_collaborator_profile_overrides.sql:ro
-      - ./database/005_dimep_sync_issues.sql:/migrations/005_dimep_sync_issues.sql:ro
-      - ./database/006_hr_employee_imuv.sql:/migrations/006_hr_employee_imuv.sql:ro
-      - ./database/007_work_assignments.sql:/migrations/007_work_assignments.sql:ro
-      - ./database/008_sanitize_collaborator_labels.sql:/migrations/008_sanitize_collaborator_labels.sql:ro
-      - ./database/009_sync_schedules.sql:/migrations/009_sync_schedules.sql:ro
-      - ./database/010_rbac_and_duplicates.sql:/migrations/010_rbac_and_duplicates.sql:ro
-      - ./database/011_performance_indexes.sql:/migrations/011_performance_indexes.sql:ro
-      - ./database/012_work_location_publishing.sql:/migrations/012_work_location_publishing.sql:ro
-      - ./database/013_submission_without_dimep_gate.sql:/migrations/013_submission_without_dimep_gate.sql:ro
+      - ./database:/migrations:ro
     entrypoint: ["/bin/sh", "-ec"]
     command:
-      - >-
-        psql -v ON_ERROR_STOP=1 -h postgres -U "$${POSTGRES_USER:-rdo_admin}" -d "$${POSTGRES_DB:-rdo}"
-        -f /migrations/003_field_diary_extensions.sql
-        -f /migrations/004_collaborator_profile_overrides.sql
-        -f /migrations/005_dimep_sync_issues.sql
-        -f /migrations/006_hr_employee_imuv.sql
-        -f /migrations/007_work_assignments.sql
-        -f /migrations/008_sanitize_collaborator_labels.sql
-        -f /migrations/009_sync_schedules.sql
-        -f /migrations/010_rbac_and_duplicates.sql
-        -f /migrations/011_performance_indexes.sql
-        -f /migrations/012_work_location_publishing.sql
-        -f /migrations/013_submission_without_dimep_gate.sql
+      - |
+        for f in /migrations/*.sql; do
+          # 001 so roda no initdb, em volume vazio: nao e idempotente.
+          case "$${f##*/}" in 001_*) continue ;; esac
+          echo "==> $${f##*/}"
+          psql -v ON_ERROR_STOP=1 -h postgres -U "$${POSTGRES_USER:-rdo_admin}" -d "$${POSTGRES_DB:-rdo}" -f "$$f"
+        done
     environment:
       PGPASSWORD: ${POSTGRES_PASSWORD:?defina POSTGRES_PASSWORD}
       POSTGRES_USER: ${POSTGRES_USER:-rdo_admin}

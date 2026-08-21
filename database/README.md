@@ -24,6 +24,16 @@
 
 Em ambientes que já tenham dados, não apague o volume para aplicar mudanças. Use migrações incrementais versionadas.
 
+## Como uma migração nova é aplicada
+
+Basta criar o arquivo aqui, com o próximo número. **Não é preciso editar o `docker-compose.mvp.yml`.**
+
+O `initdb` do Postgres roda apenas `001` e `002`, e só em volume vazio. Todo o resto é aplicado pelo serviço `migrate`, que monta este diretório inteiro e executa `*.sql` em ordem, pulando o `001`. Isso vale tanto para instalação nova quanto para base existente.
+
+Por isso **toda migração de `003` em diante precisa ser idempotente**: ela roda de novo a cada subida da stack. Use `CREATE TABLE IF NOT EXISTS`, `ADD COLUMN IF NOT EXISTS`, `CREATE OR REPLACE FUNCTION`, `DROP POLICY IF EXISTS` antes de `CREATE POLICY`, `DROP TRIGGER IF EXISTS` antes de `CREATE TRIGGER` (ou um `DO` que consulte `pg_trigger`) e `ON CONFLICT DO NOTHING` em qualquer seed.
+
+O arranjo anterior mantinha duas listas de arquivos no compose, uma para o `initdb` e outra para o `migrate`. O `005` acabou faltando na primeira: em volume novo o `011` tentava indexar `dimep_sync_issues` antes de a tabela existir, o `initdb` abortava, o Postgres nunca ficava *healthy* e o `migrate` falhava em seguida. A instância que já estava no ar nunca percebeu, porque nela o `initdb` não roda mais.
+
 ## Conexão do backend
 
 Dentro da rede Docker, use host `postgres`, porta `5432`, banco `rdo` e o usuário de `POSTGRES_RUNTIME_USER`. Não use `rdo_admin` no backend e não publique a porta do PostgreSQL na internet. O backend deve entrar na rede `rdo_internal` e oferecer uma API HTTPS para web/PWA/Flutter.
